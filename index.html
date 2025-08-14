@@ -96,6 +96,7 @@
 
 
 
+
 <style id="appLinkModalStyles">
 /* Shared modal look */
 .modal-backdrop{ position:absolute; inset:0; background:#000a; backdrop-filter: blur(2px); }
@@ -109,8 +110,8 @@
 .modal-muted{ opacity:.75; font-size:11px; }
 .copy-icon{ display:inline-flex; align-items:center; justify-content:center; border:1px solid #343842; background:#15171c; color:#fff; border-radius:8px; padding:.5rem .6rem; cursor:pointer; }
 .copy-icon svg{ width:16px; height:16px; }
+#appLinkModal, #downloadModal { position:fixed; inset:0; display:none; align-items:center; justify-content:center; z-index:9999; }
 </style>
-
 <style id="downloadModalTweaks">
 #downloadModal .status { margin-left:auto; font-size:12px; opacity:.8; }
 </style>
@@ -275,7 +276,9 @@
 
     <div class="group" id="driveControls">
       <button id="uploadAndLinkBtn" class="btn" title="Загрузить в Drive и скопировать ссылки">Upload and Link</button>
-    </div>
+    
+  <button id="signInBtn" class="btn" title="Authorize Google Drive (one-time)">Sign in with Google</button>
+</div>
 
 </div>
   <div id="plistPanel" role="menu" aria-label="Playlist"></div>
@@ -853,14 +856,6 @@ async function cachePutBlob(fileId, blob, mime){
 
 // Upload button
 
-function showAppLinkModal(link){
-  try{
-    const modal = document.getElementById('appLinkModal');
-    const input = document.getElementById('appLinkField');
-    const copy  = document.getElementById('copyAppLink');
-    const close = document.getElementById('appLinkClose');
-    if (input) input.value = link;
-    if (modal){ modal.style.display='flex'; modal.setAttribute('aria-hidden','false'); }
     // try to copy (best-effort only)
     (async () => {
       try { await navigator.clipboard.writeText(link); } catch(_){ try{ if (input){ input.select(); document.execCommand('copy'); } }catch(__){} }
@@ -1386,89 +1381,99 @@ async function loadFromCacheOrDrive(fileId){
 </div>
 
 
+
+
+
+
+<script>
+function showAppLinkModal(link){
+  try{
+    const modal = document.getElementById('appLinkModal');
+    const input = document.getElementById('appLinkField');
+    const copy  = document.getElementById('copyAppLink');
+    const close = document.getElementById('appLinkClose');
+    if (input) input.value = link;
+    if (modal){ modal.style.display='flex'; modal.setAttribute('aria-hidden','false'); }
+    (async () => {
+      try { await navigator.clipboard.writeText(link); }
+      catch(_){ try{ if (input){ input.select(); document.execCommand('copy'); } }catch(__){} }
+    })();
+    if (copy) copy.onclick = ()=>{
+      try{ navigator.clipboard.writeText(link); }
+      catch(_){ try{ if (input){ input.select(); document.execCommand('copy'); } }catch(__){} }
+    };
+    const hide = ()=>{ if (modal){ modal.style.display='none'; modal.setAttribute('aria-hidden','true'); } };
+    if (close) close.onclick = hide;
+    const backdrop = modal && modal.querySelector('.modal-backdrop'); if (backdrop) backdrop.onclick = hide;
+  }catch(e){ console.warn('showAppLinkModal error', e); }
+}
+</script>
+
+
 <script>
 (function(){
   const params = new URLSearchParams(location.search);
   const fileId = params.get('id');
   if (!fileId) return;
 
-  const $ = (id)=>document.getElementById(id);
-  const modal = $('downloadModal');
-  const btn   = $('downloadConfirm');
-  const stat  = $('dlStatus');
+  let driveAccessToken = window.driveAccessToken || null;
+  let driveTokenClient = window.driveTokenClient || null;
 
-  function setStatus(t){ if (stat) stat.textContent = t || ''; }
+  function initTokenClient(){
+    if (!window.google || !google.accounts || !google.accounts.oauth2) return null;
+    if (driveTokenClient) return driveTokenClient;
+    driveTokenClient = google.accounts.oauth2.initTokenClient({
+      client_id: '1053048724849-jaoe9s17j4okh8esuf7ffd2lqijluat8.apps.googleusercontent.com',
+      scope: 'https://www.googleapis.com/auth/drive',
+      callback: (resp)=>{ if (resp && resp.access_token){ driveAccessToken = resp.access_token; window.driveAccessToken = resp.access_token; } }
+    });
+    window.driveTokenClient = driveTokenClient;
+    return driveTokenClient;
+  }
 
-  async function ensureTokenInteractive(){
-    if (window.driveAccessToken) return window.driveAccessToken;
-    if (!window.google || !google.accounts || !google.accounts.oauth2) throw new Error('oauth_lib_not_loaded');
-    if (!window.driveTokenClient){
-      window.driveTokenClient = google.accounts.oauth2.initTokenClient({
-        client_id: '1053048724849-jaoe9s17j4okh8esuf7ffd2lqijluat8.apps.googleusercontent.com',
-        scope: 'https://www.googleapis.com/auth/drive',
-        callback: (resp)=>{
-          if (resp && resp.access_token){ window.driveAccessToken = resp.access_token; localStorage.setItem('drive_oauth_granted','1'); }
-        }
-      });
-    }
-    return await new Promise((resolve,reject)=>{
+  async function silentToken(){
+    initTokenClient();
+    if (!driveTokenClient) throw new Error('oauth_lib_not_loaded');
+    return await new Promise((resolve, reject)=>{
       try{
-        window.driveTokenClient.callback = (resp)=>{
-          if (resp && resp.access_token){ window.driveAccessToken = resp.access_token; localStorage.setItem('drive_oauth_granted','1'); resolve(window.driveAccessToken); }
-          else reject(new Error((resp && (resp.error_description||resp.error)) || 'no_access_token'));
+        driveTokenClient.callback = (resp)=>{
+          if (resp && resp.access_token){ driveAccessToken = resp.access_token; window.driveAccessToken = resp.access_token; resolve(true); }
+          else reject(new Error('no_access_token'));
         };
-        window.driveTokenClient.requestAccessToken({ prompt: 'consent' });
+        driveTokenClient.requestAccessToken({ prompt: '' });
       }catch(e){ reject(e); }
     });
   }
 
-  async function fetchDriveFileToBlob(id){
-    const url = `https://www.googleapis.com/drive/v3/files/${encodeURIComponent(id)}?alt=media&supportsAllDrives=true`;
-    const r = await fetch(url, { headers:{ Authorization:'Bearer '+window.driveAccessToken } });
-    if (!r.ok) {
-      let msg = 'Drive fetch failed: ' + r.status;
-      try{ const j = await r.json(); if (j && j.error && j.error.message) msg += ' — ' + j.error.message; }catch(_){};
-      throw new Error(msg);
-    }
-    // Stream to blob to show progress
-    const reader = r.body && r.body.getReader ? r.body.getReader() : null;
-    if (!reader) return await r.blob();
-    const chunks = []; let recvd = 0, total = Number(r.headers.get('Content-Length')||0);
-    while(true){
-      const {done, value} = await reader.read();
-      if (done) break;
-      chunks.push(value); recvd += value.byteLength;
-      if (total) setStatus(((recvd/total*100)|0) + '%');
-    }
-    setStatus('');
-    return new Blob(chunks, { type: r.headers.get('Content-Type') || 'application/octet-stream' });
+  async function interactiveToken(){
+    initTokenClient();
+    if (!driveTokenClient) throw new Error('oauth_lib_not_loaded');
+    return await new Promise((resolve, reject)=>{
+      try{
+        driveTokenClient.callback = (resp)=>{
+          if (resp && resp.access_token){ driveAccessToken = resp.access_token; window.driveAccessToken = resp.access_token; resolve(true); }
+          else reject(new Error('no_access_token'));
+        };
+        driveTokenClient.requestAccessToken({ prompt: 'consent' });
+      }catch(e){ reject(e); }
+    });
   }
 
-  async function trySilent(){
+  async function fetchDriveBlob(id){
+    const url = `https://www.googleapis.com/drive/v3/files/${encodeURIComponent(id)}?alt=media&supportsAllDrives=true`;
+    const r = await fetch(url, { headers:{ Authorization:'Bearer '+driveAccessToken } });
+    if (!r.ok){
+      let msg = 'Drive fetch failed: ' + r.status;
+      try{ const j = await r.json(); if (j && j.error && j.error.message) msg += ' — ' + j.error.message; }catch(_){}
+      throw new Error(msg);
+    }
+    return await r.blob();
+  }
+
+  async function tryAuto(){
     try{
-      if (!window.driveAccessToken && window.google && google.accounts && google.accounts.oauth2){
-        if (!window.driveTokenClient){
-          window.driveTokenClient = google.accounts.oauth2.initTokenClient({
-            client_id: '1053048724849-jaoe9s17j4okh8esuf7ffd2lqijluat8.apps.googleusercontent.com',
-            scope: 'https://www.googleapis.com/auth/drive',
-            callback: (resp)=>{
-              if (resp && resp.access_token){ window.driveAccessToken = resp.access_token; localStorage.setItem('drive_oauth_granted','1'); }
-            }
-          });
-        }
-        await new Promise((resolve, reject)=>{
-          try{
-            window.driveTokenClient.callback = (resp)=>{
-              if (resp && resp.access_token){ window.driveAccessToken = resp.access_token; resolve(); }
-              else reject(new Error('no_access_token'));
-            };
-            window.driveTokenClient.requestAccessToken({ prompt: '' });
-          }catch(e){ reject(e); }
-        });
-      }
-      if (!window.driveAccessToken) throw new Error('needs_user_gesture');
-      setStatus('');
-      const blob = await fetchDriveFileToBlob(fileId);
+      await silentToken();
+      const blob = await fetchDriveBlob(fileId);
       const url = URL.createObjectURL(blob);
       if (typeof loadURL === 'function') loadURL(url, 'drive:'+fileId, {autoplay:false});
       return true;
@@ -1476,33 +1481,61 @@ async function loadFromCacheOrDrive(fileId){
   }
 
   (async ()=>{
-    const ok = await trySilent();
+    const ok = await tryAuto();
     if (ok) return;
-    if (modal && btn){
-      modal.style.display='flex';
-      modal.setAttribute('aria-hidden','false');
-      btn.onclick = async ()=>{
-        try{
-          setStatus('Sign-in…');
-          await ensureTokenInteractive();
-          setStatus('Downloading…');
-          const blob = await fetchDriveFileToBlob(fileId);
-          const url = URL.createObjectURL(blob);
-          if (typeof loadURL === 'function') loadURL(url, 'drive:'+fileId, {autoplay:false});
-          setStatus('');
-          modal.style.display='none';
-          modal.setAttribute('aria-hidden','true');
-        }catch(err){
-          setStatus(err && err.message ? err.message : String(err));
-        }
-      };
-      const backdrop = modal.querySelector('.modal-backdrop');
-      if (backdrop) backdrop.onclick = ()=>{ modal.style.display='none'; modal.setAttribute('aria-hidden','true'); };
-    }
+    // Show Download gate
+    const modal = document.getElementById('downloadModal');
+    const btn   = document.getElementById('downloadConfirm');
+    const stat  = document.getElementById('dlStatus');
+    if (!modal || !btn) return;
+    modal.style.display='flex'; modal.setAttribute('aria-hidden','false');
+    btn.onclick = async ()=>{
+      try{
+        stat.textContent='Sign-in…';
+        await interactiveToken();
+        stat.textContent='Downloading…';
+        const blob = await fetchDriveBlob(fileId);
+        const url = URL.createObjectURL(blob);
+        if (typeof loadURL === 'function') loadURL(url, 'drive:'+fileId, {autoplay:false});
+        stat.textContent='';
+        modal.style.display='none'; modal.setAttribute('aria-hidden','true');
+      }catch(e){
+        stat.textContent = (e && e.message) || String(e);
+      }
+    };
+    const backdrop = modal.querySelector('.modal-backdrop');
+    if (backdrop) backdrop.onclick = ()=>{ modal.style.display='none'; modal.setAttribute('aria-hidden','true'); };
   })();
 })();
 </script>
 
+
+<script>
+(function(){
+  const btn = document.getElementById('signInBtn');
+  if (!btn) return;
+  btn.addEventListener('click', async ()=>{
+    try{
+      if (!window.google || !google.accounts || !google.accounts.oauth2) throw new Error('oauth_lib_not_loaded');
+      if (!window.driveTokenClient){
+        window.driveTokenClient = google.accounts.oauth2.initTokenClient({
+          client_id: '1053048724849-jaoe9s17j4okh8esuf7ffd2lqijluat8.apps.googleusercontent.com',
+          scope: 'https://www.googleapis.com/auth/drive',
+          callback: (resp)=>{ if (resp && resp.access_token){ window.driveAccessToken = resp.access_token; localStorage.setItem('drive_oauth_granted','1'); } }
+        });
+      }
+      await new Promise((resolve,reject)=>{
+        window.driveTokenClient.callback = (resp)=>{ if (resp && resp.access_token){ window.driveAccessToken = resp.access_token; localStorage.setItem('drive_oauth_granted','1'); resolve(); } else reject(new Error('no_access_token')); };
+        window.driveTokenClient.requestAccessToken({ prompt: 'consent' });
+      });
+      btn.textContent = 'Authorized';
+      btn.disabled = true;
+    }catch(e){
+      alert((e && e.message) || String(e));
+    }
+  });
+})();
+</script>
 
 </body>
 </html>
