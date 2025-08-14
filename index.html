@@ -94,23 +94,22 @@
   <meta name="referrer" content="no-referrer">
   <script src="https://accounts.google.com/gsi/client" async defer></script>
 
+
 <style id="appLinkModalStyles">
-/* Compact dark modal for app link */
 #appLinkModal{ position:fixed; inset:0; display:none; align-items:center; justify-content:center; z-index:9999; }
 #appLinkModal.show{ display:flex; }
-#appLinkModal .backdrop{ position:absolute; inset:0; background:#000c; backdrop-filter: blur(2px); }
-#appLinkModal .card{ position:relative; background:#0e0e10; color:#f2f2f2; border:1px solid #2a2a2e; border-radius:12px; padding:14px; width:min(480px, 92vw); box-shadow:0 10px 30px #000a; font-family:inherit; }
-#appLinkModal h3{ margin:0 0 8px 0; font-weight:600; font-size:15px; }
+#appLinkModal .backdrop{ position:absolute; inset:0; background:#000a; backdrop-filter: blur(2px); }
+#appLinkModal .card{ position:relative; background:#0e0f13; color:#e6e7ea; border:1px solid #2c2f36; border-radius:12px; padding:12px 14px; width:min(480px, 92vw); box-shadow:0 10px 30px #000a; font-family:inherit; }
+#appLinkModal h3{ margin:0 0 8px 0; font-weight:600; font-size:15px; color:#f1f2f4; }
 #appLinkModal .row{ display:flex; gap:.5rem; align-items:center; }
-#appLinkModal input{ flex:1; background:#1e1e22; color:#fff; border:1px solid #3b3b40; border-radius:8px; padding:.55rem .65rem; font-size:13px; }
-#copyAppLink{ display:inline-flex; align-items:center; justify-content:center; border:1px solid #3b3b40; background:#1a1a1f; color:#fff; border-radius:8px; padding:.5rem .6rem; cursor:pointer; }
+#appLinkModal input{ flex:1; background:#181a1f; color:#fff; border:1px solid #343842; border-radius:8px; padding:.55rem .65rem; font-size:13px; }
+#copyAppLink{ display:inline-flex; align-items:center; justify-content:center; border:1px solid #343842; background:#15171c; color:#fff; border-radius:8px; padding:.5rem .6rem; cursor:pointer; }
 #copyAppLink svg{ width:16px; height:16px; }
 #copyAppLink:active{ transform:translateY(1px); }
-#appLinkClose{ margin-top:8px; }
-#openAppLink{ margin-left:auto; }
-.small-muted{ opacity:.75; font-size:11px; margin-top:6px; }
+#appLinkClose{ margin-left:auto; }
+#appLinkFooter{ display:flex; align-items:center; gap:.75rem; margin-top:8px; }
+#appLinkFooter .muted{ opacity:.75; font-size:11px; }
 </style>
-
 </head>
 <body>
 
@@ -856,7 +855,6 @@ function showAppLinkModal(link){
   const input = document.getElementById('appLinkField');
   const copy  = document.getElementById('copyAppLink');
   const close = document.getElementById('appLinkClose');
-  const open  = document.getElementById('openAppLink');
   if (input) input.value = link;
   modal.classList.add('show');
   modal.setAttribute('aria-hidden','false');
@@ -865,7 +863,6 @@ function showAppLinkModal(link){
   const hide = ()=>{ modal.classList.remove('show'); modal.setAttribute('aria-hidden','true'); };
   if (close) close.onclick = hide;
   const backdrop = modal.querySelector && modal.querySelector('.backdrop'); if (backdrop) backdrop.onclick = hide;
-  if (open) open.onclick = ()=> { window.location.href = link; };
 }
 
 // Upload button
@@ -1118,6 +1115,7 @@ async function loadFromCacheOrDrive(fileId){
 </script>
 
 
+
 <div id="appLinkModal" aria-hidden="true">
   <div class="backdrop"></div>
   <div class="card">
@@ -1131,13 +1129,11 @@ async function loadFromCacheOrDrive(fileId){
         </svg>
       </button>
     </div>
-    <div class="row" style="margin-top:8px; justify-content:flex-end;">
-      <button id="openAppLink" class="btn">Open</button>
+    <div id="appLinkFooter">
       <button id="appLinkClose" class="btn">Close</button>
+      <span class="muted">The link is copied automatically. Use the icon to copy again.</span>
     </div>
-    <div class="small-muted">The link is copied automatically. Use the copy button to copy again.</div>
   </div>
 </div>
-
 </body>
 </html>
