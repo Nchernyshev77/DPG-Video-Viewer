@@ -97,28 +97,18 @@
 
 
 <style id="appLinkModalStyles">
-#appLinkModal{ position:fixed; inset:0; display:none; align-items:center; justify-content:center; z-index:9999; }
-#appLinkModal.show{ display:flex; }
-#appLinkModal .backdrop{ position:absolute; inset:0; background:#000a; backdrop-filter: blur(2px); }
-#appLinkModal .card{ position:relative; background:#0e0f13; color:#e6e7ea; border:1px solid #2c2f36; border-radius:12px; padding:12px 14px; width:min(480px, 92vw); box-shadow:0 10px 30px #000a; font-family:inherit; }
-#appLinkModal h3{ margin:0 0 8px 0; font-weight:600; font-size:15px; color:#f1f2f4; }
-#appLinkModal .row{ display:flex; gap:.5rem; align-items:center; }
-#appLinkModal input{ flex:1; background:#181a1f; color:#fff; border:1px solid #343842; border-radius:8px; padding:.55rem .65rem; font-size:13px; }
-#copyAppLink{ display:inline-flex; align-items:center; justify-content:center; border:1px solid #343842; background:#15171c; color:#fff; border-radius:8px; padding:.5rem .6rem; cursor:pointer; }
-#copyAppLink svg{ width:16px; height:16px; }
-#copyAppLink:active{ transform:translateY(1px); }
-#appLinkFooter{ display:flex; align-items:center; justify-content:space-between; gap:.75rem; margin-top:8px; }
-#appLinkFooter .muted{ opacity:.75; font-size:11px; }
-#appLinkModal .btn{ background:#0e0f13; color:#e6e7ea; border:1px solid #2c2f36; }
-</style>
-
-<style id="authGateStyles">
-#authGate{ position:fixed; inset:0; display:none; align-items:center; justify-content:center; z-index:9998; }
-#authGate.show{ display:flex; }
-#authGate .card{ background:#0e0f13; color:#e6e7ea; border:1px solid #2c2f36; border-radius:12px; padding:14px 16px; box-shadow:0 10px 30px #000a; width:min(420px, 92vw); }
-#authGate h3{ margin:0 0 8px 0; font-size:15px; }
-#authGate p{ margin:0 0 10px 0; opacity:.85; font-size:13px; }
-#authGate .btn{ background:#0e0f13; color:#e6e7ea; border:1px solid #2c2f36; }
+/* Shared modal look */
+.modal-backdrop{ position:absolute; inset:0; background:#000a; backdrop-filter: blur(2px); }
+.modal-card{ position:relative; background:#0e0f13; color:#e6e7ea; border:1px solid #2c2f36; border-radius:12px; padding:12px 14px; width:min(480px, 92vw); box-shadow:0 10px 30px #000a; font-family:inherit; }
+.modal-title{ margin:0 0 8px 0; font-weight:600; font-size:15px; color:#f1f2f4; }
+.modal-row{ display:flex; gap:.5rem; align-items:center; }
+.modal-input{ flex:1; background:#181a1f; color:#fff; border:1px solid #343842; border-radius:8px; padding:.55rem .65rem; font-size:13px; }
+.modal-btn{ border:1px solid #2c2f36; background:#0e0f13; color:#e6e7ea; border-radius:8px; padding:.5rem .7rem; cursor:pointer; }
+.modal-btn:active{ transform:translateY(1px); }
+.modal-footer{ display:flex; align-items:center; justify-content:space-between; gap:.75rem; margin-top:8px; }
+.modal-muted{ opacity:.75; font-size:11px; }
+.copy-icon{ display:inline-flex; align-items:center; justify-content:center; border:1px solid #343842; background:#15171c; color:#fff; border-radius:8px; padding:.5rem .6rem; cursor:pointer; }
+.copy-icon svg{ width:16px; height:16px; }
 </style>
 </head>
 <body>
@@ -865,11 +855,18 @@ function showAppLinkModal(link){
   const copy  = document.getElementById('copyAppLink');
   const close = document.getElementById('appLinkClose');
   if (input) input.value = link;
-  modal.classList.add('show');
+  modal.style.display = 'flex';
   modal.setAttribute('aria-hidden','false');
-
   async function copyText(t){
     try { await navigator.clipboard.writeText(t); return true; }
+    catch(e){ try{ if (input){ input.select(); document.execCommand('copy'); return true; } }catch(_){} return false; }
+  }
+  copy.onclick = ()=> { copyText(link); };
+  copyText(link);
+  const hide = ()=>{ modal.style.display='none'; modal.setAttribute('aria-hidden','true'); };
+  close.onclick = hide;
+  const backdrop = modal.querySelector('.modal-backdrop'); if (backdrop) backdrop.onclick = hide;
+}
     catch(e){
       try { if (input){ input.select(); document.execCommand('copy'); return true; } }
       catch(_) {}
@@ -1132,82 +1129,6 @@ async function loadFromCacheOrDrive(fileId){
   })();
 })();
 
-<script>
-(function(){
-  const params = new URLSearchParams(location.search);
-  const id = params.get('id');
-  if (!id) return;
-
-  async function ensureTokenInteractive(){
-    return await new Promise((resolve, reject)=>{
-      try{
-        if (!window.driveTokenClient && window.google && google.accounts && google.accounts.oauth2){
-          window.driveTokenClient = google.accounts.oauth2.initTokenClient({
-            client_id: '1053048724849-jaoe9s17j4okh8esuf7ffd2lqijluat8.apps.googleusercontent.com',
-            scope: 'https://www.googleapis.com/auth/drive',
-            callback: (resp)=>{
-              if (resp && resp.access_token){ window.driveAccessToken = resp.access_token; resolve(true); }
-              else reject(new Error('no_access_token'));
-            }
-          });
-        }
-        window.driveTokenClient.callback = (resp)=>{
-          if (resp && resp.access_token){ window.driveAccessToken = resp.access_token; resolve(true); }
-          else reject(new Error('no_access_token'));
-        };
-        window.driveTokenClient.requestAccessToken({ prompt: 'consent' });
-      }catch(e){ reject(e); }
-    });
-  }
-
-  async function fetchDriveFileToBlob(fileId){
-    const url = `https://www.googleapis.com/drive/v3/files/${encodeURIComponent(fileId)}?alt=media&supportsAllDrives=true`;
-    const r = await fetch(url, { headers:{ Authorization:'Bearer ' + window.driveAccessToken } });
-    if (!r.ok) throw new Error('Drive fetch failed: ' + r.status);
-    return await r.blob();
-  }
-
-  (async ()=>{
-    try{
-      // silent try
-      if (!window.driveAccessToken && window.driveTokenClient && window.google && google.accounts && google.accounts.oauth2){
-        await new Promise((resolve, reject)=>{
-          try{
-            window.driveTokenClient.callback = (resp)=>{
-              if (resp && resp.access_token){ window.driveAccessToken = resp.access_token; resolve(); }
-              else reject(new Error('no_access_token'));
-            };
-            window.driveTokenClient.requestAccessToken({ prompt: '' });
-          }catch(e){ reject(e); }
-        });
-      }
-      if (!window.driveAccessToken) throw new Error('needs_user_gesture');
-      const blob = await fetchDriveFileToBlob(id);
-      const url = URL.createObjectURL(blob);
-      if (typeof loadURL === 'function') loadURL(url, 'drive:'+id, {autoplay:false});
-    }catch(e){
-      // show overlay gate
-      const gate = document.getElementById('authGate');
-      const btn  = document.getElementById('gateSignIn');
-      if (gate && btn){
-        gate.classList.add('show');
-        gate.setAttribute('aria-hidden','false');
-        btn.onclick = async ()=>{
-          try{
-            await ensureTokenInteractive();
-            gate.classList.remove('show');
-            const blob = await fetchDriveFileToBlob(id);
-            const url = URL.createObjectURL(blob);
-            if (typeof loadURL === 'function') loadURL(url, 'drive:'+id, {autoplay:false});
-          }catch(err){
-            alert((err && err.message) || String(err));
-          }
-        };
-      }
-    }
-  })();
-})();
-</script>
 </script>
 
 
@@ -1216,7 +1137,7 @@ async function loadFromCacheOrDrive(fileId){
 <div id="appLinkModal" aria-hidden="true">
   <div class="backdrop"></div>
   <div class="card">
-    <h3>App link</h3>
+    <h3>Copy Link</h3>
     <div class="row">
       <input id="appLinkField" readonly>
       <button id="copyAppLink" title="Copy link">
@@ -1233,12 +1154,6 @@ async function loadFromCacheOrDrive(fileId){
   </div>
 </div>
 
-<div id="authGate" aria-hidden="true">
-  <div class="card">
-    <h3>Access required</h3>
-    <p>Sign in with your corporate Google account to open the video.</p>
-    <button id="gateSignIn" class="btn">Continue</button>
-  </div>
 </div>
 
 
@@ -1437,6 +1352,119 @@ async function loadFromCacheOrDrive(fileId){
 
   if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', bind);
   else bind();
+})();
+</script>
+
+
+<div id="downloadModal" style="position:fixed; inset:0; display:none; align-items:center; justify-content:center; z-index:9998;" aria-hidden="true">
+  <div class="modal-backdrop"></div>
+  <div class="modal-card">
+    <h3 class="modal-title">Download Video</h3>
+    <div class="modal-row" style="margin-top:2px;">
+      <span class="modal-muted">Sign in to your Google account to download and play this video.</span>
+    </div>
+    <div class="modal-footer">
+      <span></span>
+      <button id="downloadConfirm" class="modal-btn">Download Video</button>
+    </div>
+  </div>
+</div>
+
+
+<script>
+(function(){
+  const params = new URLSearchParams(location.search);
+  const fileId = params.get('id');
+  if (!fileId) return;
+
+  const $ = (id)=>document.getElementById(id);
+
+  async function ensureTokenInteractive(){
+    if (window.driveAccessToken) return window.driveAccessToken;
+    if (!window.google || !google.accounts || !google.accounts.oauth2) throw new Error('oauth_lib_not_loaded');
+    if (!window.driveTokenClient){
+      window.driveTokenClient = google.accounts.oauth2.initTokenClient({
+        client_id: '1053048724849-jaoe9s17j4okh8esuf7ffd2lqijluat8.apps.googleusercontent.com',
+        scope: 'https://www.googleapis.com/auth/drive',
+        callback: (resp)=>{
+          if (resp && resp.access_token){ window.driveAccessToken = resp.access_token; localStorage.setItem('drive_oauth_granted','1'); }
+        }
+      });
+    }
+    return await new Promise((resolve,reject)=>{
+      try{
+        window.driveTokenClient.callback = (resp)=>{
+          if (resp && resp.access_token){ window.driveAccessToken = resp.access_token; localStorage.setItem('drive_oauth_granted','1'); resolve(window.driveAccessToken); }
+          else reject(new Error((resp && (resp.error_description||resp.error)) || 'no_access_token'));
+        };
+        window.driveTokenClient.requestAccessToken({ prompt: 'consent' });
+      }catch(e){ reject(e); }
+    });
+  }
+
+  async function fetchDriveFileToBlob(id){
+    const url = `https://www.googleapis.com/drive/v3/files/${encodeURIComponent(id)}?alt=media&supportsAllDrives=true`;
+    const r = await fetch(url, { headers:{ Authorization:'Bearer '+window.driveAccessToken } });
+    if (!r.ok) throw new Error('Drive fetch failed: ' + r.status);
+    return await r.blob();
+  }
+
+  async function trySilent(){
+    // try to silently obtain token if user already granted
+    try{
+      if (!window.driveAccessToken && window.google && google.accounts && google.accounts.oauth2){
+        if (!window.driveTokenClient){
+          window.driveTokenClient = google.accounts.oauth2.initTokenClient({
+            client_id: '1053048724849-jaoe9s17j4okh8esuf7ffd2lqijluat8.apps.googleusercontent.com',
+            scope: 'https://www.googleapis.com/auth/drive',
+            callback: (resp)=>{
+              if (resp && resp.access_token){ window.driveAccessToken = resp.access_token; localStorage.setItem('drive_oauth_granted','1'); }
+            }
+          });
+        }
+        await new Promise((resolve, reject)=>{
+          try{
+            window.driveTokenClient.callback = (resp)=>{
+              if (resp && resp.access_token){ window.driveAccessToken = resp.access_token; resolve(); }
+              else reject(new Error('no_access_token'));
+            };
+            window.driveTokenClient.requestAccessToken({ prompt: '' });
+          }catch(e){ reject(e); }
+        });
+      }
+      if (!window.driveAccessToken) throw new Error('needs_user_gesture');
+      const blob = await fetchDriveFileToBlob(fileId);
+      const url = URL.createObjectURL(blob);
+      if (typeof loadURL === 'function') loadURL(url, 'drive:'+fileId, {autoplay:false});
+      return true;
+    }catch(e){ return false; }
+  }
+
+  (async ()=>{
+    const ok = await trySilent();
+    if (ok) return;
+    // show download modal
+    const modal = $('downloadModal');
+    const btn = $('downloadConfirm');
+    if (modal && btn){
+      modal.style.display='flex';
+      modal.setAttribute('aria-hidden','false');
+      btn.onclick = async ()=>{
+        try{
+          await ensureTokenInteractive();
+          modal.style.display='none';
+          const blob = await fetchDriveFileToBlob(fileId);
+          const url = URL.createObjectURL(blob);
+          if (typeof loadURL === 'function') loadURL(url, 'drive:'+fileId, {autoplay:false});
+        }catch(err){
+          alert((err && err.message) || String(err));
+        }
+      };
+      // close by clicking backdrop
+      const backdrop = modal.querySelector('.modal-backdrop');
+      if (backdrop) backdrop.onclick = ()=>{ modal.style.display='none'; modal.setAttribute('aria-hidden','true'); };
+    }
+  })();
 })();
 </script>
 
