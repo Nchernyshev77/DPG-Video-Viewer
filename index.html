@@ -269,7 +269,7 @@ async function uploadChunks(sessionUrl, f, onProgress){
     if (res.status === 308){
       const rng = res.headers.get('Range');
       if (rng){
-        const m = rng.match(/(\\d+)-(\\d+)$/);
+        const m = rng.match(/(\d+)-(\d+)$/);
         offset = m ? (parseInt(m[2],10) + 1) : end;
       } else offset = end;
       if (onProgress) onProgress(offset, f.size);
