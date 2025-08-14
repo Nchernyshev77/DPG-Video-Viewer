@@ -117,33 +117,1004 @@
 <!-- Robust capture of chosen files (file input, DnD, showOpenFilePicker) -->
 <script>
 (function(){
-  const id = new URLSearchParams(window.location.search).get('id');
-  if (!id) return;
-
-  (async () => {
-    try {
-      await ensureDriveToken();                 // silent attempt
-      if (!driveAccessToken) throw new Error('needs_user_gesture');
-      await loadById(id);                       // or loadFromCacheOrDrive(id)
-    } catch {
-      const toolbar = document.getElementById('toolbar') || document.body;
-      const btn = document.createElement('button');
-      btn.className = 'btn';
-      btn.textContent = 'Open video';
-      btn.title = 'Authorize Google Drive and open the video';
-      btn.onclick = async () => {
-        try {
-          await ensureDriveToken({ interactive: true });
-          await loadById(id);
-          btn.remove();
-        } catch (e) {
-          alert((e && e.message) || String(e));
+  // 2.1 capture any input[type=file]
+  document.addEventListener('change', function(ev){
+    const t = ev.target;
+    try{
+      if (t && t.type === 'file' && t.files && t.files.length){
+        window.__lastSelectedFile = t.files[t.files.length-1];
+      }
+    }catch(e){}
+  }, true);
+  // 2.2 capture drag&drop
+  document.addEventListener('drop', function(ev){
+    try{
+      if (ev.dataTransfer && ev.dataTransfer.files && ev.dataTransfer.files.length){
+        window.__lastSelectedFile = ev.dataTransfer.files[ev.dataTransfer.files.length-1];
+      }
+    }catch(e){}
+  }, true);
+  // 2.3 capture showOpenFilePicker
+  if ('showOpenFilePicker' in window){
+    const orig = window.showOpenFilePicker.bind(window);
+    window.showOpenFilePicker = async function(...args){
+      const handles = await orig(...args);
+      try{
+        if (handles && handles[0] && handles[0].getFile){
+          const f = await handles[0].getFile();
+          window.__lastSelectedFile = f;
         }
+      }catch(e){}
+      return handles;
+    };
+  }
+  // 2.4 hook addFiles if present
+  const hookAddFiles = ()=>{
+    try{
+      if (typeof window.addFiles === 'function' && !window.__addFilesHooked){
+        const orig = window.addFiles;
+        window.addFiles = function(list){
+          try{
+            const arr = Array.from(list || []);
+            if (arr.length) window.__lastSelectedFile = arr[arr.length-1];
+          }catch(e){}
+          return orig.apply(this, arguments);
+        };
+        window.__addFilesHooked = true;
+      }
+    }catch(e){}
+  };
+  hookAddFiles();
+  // some apps define it late
+  setTimeout(hookAddFiles, 2000);
+})();
+</script>
+
+<div id="app">
+  <div id="toolbar" role="toolbar" aria-label="Controls">
+    <div class="group">
+      <label class="btn" title="Open one or more MP4/WebM">
+        <span class="i" aria-hidden="true">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3v12"/><path d="M8 11l4 4l4-4"/><path d="M4 21h16"/></svg>
+        </span>
+        <span>Open</span>
+        <input id="file" type="file" accept="video/*" multiple />
+      </label>
+      <button id="play" class="btn" title="Space — Play/Pause" disabled>
+        <span class="i" aria-hidden="true" id="playIcon">
+          <svg viewBox="0 0 24 24" fill="currentColor"><path d="M8 5l10 7l-10 7z"/></svg>
+        </span>
+        <span id="playLabel">Play</span>
+      </button>
+      <button id="fsBtn" class="btn" title="Fullscreen" aria-label="Fullscreen">
+        <span class="i" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M9 3H5v4M15 3h4v4M9 21H5v-4M19 21v-4h-4"/></svg></span>
+      </button>
+      <button id="stepBack" class="btn" title="←/A — previous frame" disabled>
+        <span class="i" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12v-6"/><path d="M19 5l-10 7l10 7z"/></svg></span>
+        <span>−1</span>
+      </button>
+      <button id="stepFwd" class="btn" title="→/D — next frame" disabled>
+        <span class="i" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M19 12v-6"/><path d="M5 5l10 7l-10 7z"/></svg></span>
+        <span>+1</span>
+      </button>
+    </div>
+
+    <div class="group" style="flex:1">
+      <div id="tc" style="min-width:120px;opacity:.9">00:00 / 00:00</div>
+      <input id="time" type="range" min="0" max="0" value="0" step="0.001" aria-label="Timeline" disabled />
+    </div>
+
+    <div class="group">
+      <span style="opacity:.9">Zoom</span>
+      <input id="zoom" type="range" min="20" max="100" value="75" step="1" aria-label="Zoom (FOV)" />
+      <button id="resetView" class="btn" title="Reset view">
+        <span class="i" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M3 12a9 9 0 1 0 3-6"/><path d="M3 4v6h6"/></svg></span>
+        <span>Reset</span>
+      </button>
+    </div>
+
+    <div class="group">
+      
+      <select id="playlist" title="Playlist" disabled></select>
+      <button id="plistBtn" class="btn" title="Manage playlist">
+        <span class="i" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M4 6h16M4 12h16M4 18h16"/></svg></span>
+        <span id="plistBtnLabel">Playlist</span>
+      </button>
+      
+    </div>
+
+    <div class="group">
+      <button id="closeAll" class="btn" title="Unload all videos">
+        <span class="i" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M5 5l14 14M19 5L5 19"/></svg></span>
+        <span>Close all</span>
+      </button>
+      <button id="infoBtn" class="btn" title="Hotkeys / Info">
+        <span class="i" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="9"/><path d="M12 8.5h.01"/><path d="M11 11h2v5h-2z"/></svg></span>
+        <span>Info</span>
+      </button>
+    </div>
+  </div>
+
+  <div id="viewer">
+    <div id="introBackdrop" class="show"></div>
+    <div id="dropmask">Drag & Drop MP4/WebM files here</div>
+    <div id="status" class="show">
+      <div id="statusText" style="margin-bottom:.5rem">Drag & Drop a video here or click <b>Open</b>.</div>
+      <progress max="1" value="0" id="progress" hidden></progress>
+    </div>
+
+    <div id="hud"><span id="hudFps">FPS: —</span><span class="sep">|</span><span id="hudFrame">Frame: —</span></div>
+
+    <!-- fullscreen timeline overlay -->
+    <div id="fsBar">
+      <div id="fsTime">00:00 / 00:00</div>
+      <input id="fsTimeRange" type="range" min="0" max="0" value="0" step="0.001" aria-label="Fullscreen timeline" />
+    </div>
+  </div>
+
+  <!-- Info panel -->
+  <aside id="infoPanel" aria-label="Hotkeys">
+    <header>Hotkeys</header>
+    <div class="body">
+      <dl>
+        <dt>Play / Pause</dt><dd>Space or Mouse‑wheel click</dd>
+        <dt>Step −1 frame</dt><dd>← or A</dd>
+        <dt>Step +1 frame</dt><dd>→ or D</dd>
+        <dt>Prev video</dt><dd>↑ or W</dd>
+        <dt>Next video</dt><dd>↓ or S</dd>
+        <dt>Fullscreen</dt><dd>Double‑click viewer or button</dd>
+        <dt>Look around</dt><dd>Mouse drag (inverted)</dd>
+        <dt>Zoom</dt><dd>Mouse wheel</dd>
+      <dt>Reset view</dt><dd>R</dd>
+      </dl>
+    </div>
+  </aside>
+
+    <div class="group" id="driveControls">
+      <button id="uploadAndLinkBtn" class="btn" title="Загрузить в Drive и скопировать ссылки">Upload and Link</button>
+    </div>
+
+</div>
+  <div id="plistPanel" role="menu" aria-label="Playlist"></div>
+  <span id="meas" style="position:absolute;visibility:hidden;white-space:nowrap"></span>
+
+<script type="module">
+  import * as THREE from 'https://unpkg.com/three@0.160.0/build/three.module.js';
+  import { OrbitControls } from 'https://unpkg.com/three@0.160.0/examples/jsm/controls/OrbitControls.js?module';
+
+  // === UI ===
+  const I=id=>document.getElementById(id);
+  const [fileInput,playBtn,stepBackBtn,stepFwdBtn,timeSlider,tc,zoomSlider,resetViewBtn,status,statusText,progress,dropmask,fsBtn,closeAllBtn,playlistSel,introBackdrop,fsBar,fsTime,fsTimeRange,playIcon,playLabel,infoBtn,infoPanel,plistBtn,plistBtnLabel,plistPanel,hudFps,hudFrame,viewer,toolbar,meas] = ['file','play','stepBack','stepFwd','time','tc','zoom','resetView','status','statusText','progress','dropmask','fsBtn','closeAll','playlist','introBackdrop','fsBar','fsTime','fsTimeRange','playIcon','playLabel','infoBtn','infoPanel','plistBtn','plistBtnLabel','plistPanel','hudFps','hudFrame','viewer','toolbar','meas'].map(I);
+  const on=(t,evs,fn,opt)=>evs.split(' ').forEach(e=>t.addEventListener(e,fn,opt));
+
+  // === THREE ===
+  const renderer = new THREE.WebGLRenderer({ antialias:true, alpha:false });
+  renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
+  renderer.setSize(viewer.clientWidth, viewer.clientHeight, true);
+  renderer.setClearColor(0x000000, 1);
+  viewer.appendChild(renderer.domElement);
+
+  const scene = new THREE.Scene();
+  const camera = new THREE.PerspectiveCamera(75, viewer.clientWidth/viewer.clientHeight, 0.1, 1100);
+  camera.position.set(0,0,0.01);
+
+  const controls = new OrbitControls(camera, renderer.domElement);
+  controls.enableDamping = true; controls.dampingFactor = 0.07;
+  controls.enablePan = false; controls.rotateSpeed = -0.35; // inverted axes
+  controls.enableZoom = false; // wheel -> FOV zoom
+  const isFirefox = /firefox/i.test(navigator.userAgent);
+
+  // Sphere for equirectangular; inside-out w/o mirroring
+  const sphere = new THREE.SphereGeometry(500, 64, 64);
+  sphere.scale(-1, 1, 1);
+  const material = new THREE.MeshBasicMaterial({ color: 0xffffff });
+  const mesh = new THREE.Mesh(sphere, material);
+  scene.add(mesh);
+
+  // Flat video plane (hidden by default)
+  let plane;
+  const planeGeo = new THREE.PlaneGeometry(1,1);
+  plane = new THREE.Mesh(planeGeo, material);
+  plane.visible = false; plane.position.set(0,0,-1);
+  scene.add(plane);
+
+  // === Video ===
+  const video = document.createElement('video');
+  video.playsInline = true; video.setAttribute('playsinline','');
+  video.preload = 'auto'; // ensure first frame decodes for texture
+  video.crossOrigin = 'anonymous';
+  video.controls = false; video.muted = false; video.loop = true; video.autoplay = false;
+
+  let haveMetadata = false; let isScrubbing = false;
+  let estimatedFPS = null; // auto-detected
+  let sourceFPS = null;       // from container metadata (preferred)
+  let displayFPS = null;      // what we show in HUD (fixed)
+  let currentFile = null;     // File of current playlist item
+  let renderMode = 'vr';      // 'vr' | 'flat'
+  let panX = 0, panY = 0;      // pan offsets for flat mode
+  let pendingAutoplay = false; // keep playing across navigation
+  let videoTex = null;
+  let allowPlay = false; // guard against unwanted short autoplay
+
+  // === Utils ===
+  function fmtTime(t){ if(!Number.isFinite(t)) return '00:00'; const s=Math.max(0, Math.floor(t)); const m=Math.floor(s/60); const sec=s%60; return `${String(m).padStart(2,'0')}:${String(sec).padStart(2,'0')}`; }
+  function updateHUD(){ const fps = displayFPS; hudFps.textContent = 'FPS: ' + (fps ? fps : '—'); const t = video.currentTime || 0; hudFrame.textContent = 'Frame: ' + (fps ? Math.max(0, Math.round(t*fps)) : '—'); }
+  function updateTimeUI(){ const cur=video.currentTime||0, dur=video.duration||0; const curStr=fmtTime(cur), durStr=fmtTime(dur); tc.textContent = `${curStr} / ${durStr}`; fsTime.textContent = `${curStr} / ${durStr}`; if(!isScrubbing && Number.isFinite(dur)){ const maxStr=String(dur.toFixed(3)); const valStr=String((video.currentTime||0).toFixed(3)); timeSlider.max=maxStr; fsTimeRange.max=maxStr; timeSlider.value=valStr; fsTimeRange.value=valStr; } }
+
+  function attachVideoTexture(){
+    if(videoTex) return;
+    videoTex = new THREE.VideoTexture(video);
+    videoTex.colorSpace = THREE.SRGBColorSpace;
+    videoTex.minFilter = THREE.LinearFilter; videoTex.magFilter = THREE.LinearFilter;
+    applyLetterbox(videoTex);
+    material.map = videoTex; material.needsUpdate = true; videoTex.needsUpdate = true;
+  }
+
+  function applyLetterbox(tex){ const w=video.videoWidth||0,h=video.videoHeight||0; if(!w||!h) return; const r=w/h; tex.offset.set(0,0); tex.repeat.set(1,1); if(Math.abs(r-2)<.01) return; if(r<2){ const repY=r/2; tex.repeat.y=repY; tex.offset.y=(1-repY)/2; } else { const repX=2/r; tex.repeat.x=repX; tex.offset.x=(1-repX)/2; } tex.needsUpdate=true; }
+
+  // Mode: VR (sphere) vs FLAT (plane)
+  const isVRAspect=()=>{ const w=video.videoWidth||0,h=video.videoHeight||0; if(!w||!h) return null; return Math.abs(w/h - 2) < 0.02; };
+  function applyVR(){ renderMode='vr'; controls.enabled=true; mesh.visible=true; plane.visible=false; }
+  function applyFLAT(){ renderMode='flat'; controls.enabled=false; mesh.visible=false; plane.visible=true; panX=0; panY=0; fitPlane(); }
+  function decideAndApplyMode(){ const v=isVRAspect(); (v?applyVR:applyFLAT)(); }
+  function fitPlane(){
+    if(renderMode!=='flat') return;
+    const d=1;
+    const vh=2*d*Math.tan(camera.fov*Math.PI/360);
+    const vw=vh*camera.aspect;
+    const av=(video.videoWidth||1)/(video.videoHeight||1);
+    let pw,ph;
+    if(vw/vh>av){ ph=vh; pw=ph*av; } else { pw=vw; ph=pw/av; }
+    // Zoom for flat mode: smaller FOV => larger plane (zoom-in)
+    const z = 75 / (camera.fov||75);
+    plane.position.set(panX,panY,-d);
+    plane.scale.set(pw*z,ph*z,1);
+  }
+
+  const refreshTex=()=>{ attachVideoTexture(); if(renderMode==='vr'){ applyLetterbox(videoTex); } else if(videoTex){ videoTex.offset.set(0,0); videoTex.repeat.set(1,1); } if(videoTex) videoTex.needsUpdate = true; }
+
+  // Render strategy: use requestVideoFrameCallback when playing (smoother in Firefox)
+  const useVFC = isFirefox && typeof video.requestVideoFrameCallback === 'function';
+  let vfcActive = false;
+
+  function loop(){
+    controls.update();
+    updateTimeUI(); updateHUD();
+    if(videoTex && !video.paused && video.readyState >= 2){ videoTex.needsUpdate = true; }
+    renderer.render(scene, camera);
+  }
+  renderer.setAnimationLoop(loop);
+
+  function vfcLoop(){
+    if(!useVFC) return;
+    if(video.paused || video.readyState < 2){ vfcActive = false; return; }
+    controls.update();
+    updateTimeUI(); updateHUD();
+    if(videoTex) videoTex.needsUpdate = true;
+    renderer.render(scene, camera);
+    video.requestVideoFrameCallback(()=>vfcLoop());
+  }
+  on(video,'play pause', e=>{ if(e.type==='play' && useVFC && !vfcActive){ vfcActive=true; video.requestVideoFrameCallback(()=>vfcLoop()); } else if(e.type==='pause'){ vfcActive=false; } });
+
+  // === Playlist ===
+  const playlist = []; // {name, url}
+  const revokers = []; // revoke functions
+  let currentIndex = -1;
+
+  function addFiles(fileList){
+    const files = Array.from(fileList || []).filter(f=> /^video\/(mp4|webm)/.test(f.type) || /\.(mp4|webm)$/i.test(f.name));
+    if(!files.length) return;
+    files.forEach(f=>{ const url=URL.createObjectURL(f); playlist.push({ name:f.name, url, file:f, type:f.type||'' }); revokers.push(()=>URL.revokeObjectURL(url)); });
+    rebuildPlaylistUI();
+    loadIndex(playlist.length-1, {autoplay:false});
+  }
+
+  function rebuildPlaylistUI(){
+    playlistSel.innerHTML = playlist.map((it,i)=>`<option value="${i}">${i+1}. ${it.name}</option>`).join('');
+    const en=!!playlist.length; [playlistSel,playBtn,stepBackBtn,stepFwdBtn].forEach(el=>el.disabled=!en);
+    if(currentIndex>=0) playlistSel.value=String(currentIndex);
+    if(en){ plistBtnLabel.textContent=String(playlist.length); plistBtn.title=playlist[currentIndex]?.name||'Playlist'; } else { plistBtnLabel.textContent='0'; plistBtn.title='Playlist'; }
+    rebuildPlaylistPanel();
+  }
+
+  function loadIndex(i, opts={autoplay:false}){
+    if(i<0 || i>=playlist.length) return;
+    const wasPlaying = opts.autoplay;
+    currentIndex = i; playlistSel.value = String(i);
+    currentFile = playlist[i].file || null;
+    loadURL(playlist[i].url, playlist[i].name, {autoplay: wasPlaying});
+  }
+  const nav=(d)=>{ if(!playlist.length) return; const p=!video.paused&&haveMetadata; loadIndex((currentIndex+d+playlist.length)%playlist.length,{autoplay:p}); };
+  
+  
+  playlistSel.addEventListener('change', ()=>{ const wasPlaying = !video.paused && haveMetadata; const i = parseInt(playlistSel.value,10); loadIndex(i, {autoplay:wasPlaying}); });
+
+  // === Custom playlist panel ===
+  function rebuildPlaylistPanel(){
+    if(!plistPanel) return;
+    if(!playlist.length){ plistPanel.innerHTML = '<div style="padding:.6rem .8rem; color:#9aa3ad">Empty</div>'; return; }
+    const rows = playlist.map((item,i)=>{
+      const active = (i===currentIndex) ? ' active' : '';
+      return `<div class="plItem${active}" data-idx="${i}">
+        <span class="idx">${i+1}.</span>
+        <span class="name" title="${item.name.replace(/&/g,'&amp;')}">${item.name}</span>
+        <button class="x" title="Remove" aria-label="Remove">×</button>
+      </div>`;
+    }).join('');
+    plistPanel.innerHTML = rows;
+  }
+  function overlayTopPx(){ return Math.round(toolbar.getBoundingClientRect().bottom+6); }
+  function openPlistPanel(){
+    rebuildPlaylistPanel();
+    const r = plistBtn.getBoundingClientRect();
+    const margin = 12; // keep some space to see rounded corners on the right
+
+    let longest=''; for(const it of playlist){const n=it.name||''; if(n.length>longest.length) longest=n;}
+    meas.textContent = longest;
+    let desired = Math.ceil(meas.getBoundingClientRect().width) + 56;
+
+    const maxW = Math.floor(window.innerWidth * 0.8);
+    const minW = 260;
+    desired = Math.max(minW, Math.min(maxW, desired));
+
+    // Set explicit width so content fits; expand leftwards if needed
+    plistPanel.style.width = desired + 'px';
+
+    let left = Math.round(r.left);
+    // Shift left if we would overflow on the right or get too close to the right edge
+    const rightEdge = left + desired;
+    let overflow = rightEdge + margin - window.innerWidth;
+    if(overflow > 0){ left = left - overflow; }
+    const remainingRight = window.innerWidth - (left + desired);
+    if(remainingRight < margin){ left -= (margin - remainingRight); }
+    // Clamp to screen with a small left margin
+    if(left < margin) left = margin;
+
+    plistPanel.style.left = Math.round(left) + 'px';
+    plistPanel.style.top = overlayTopPx() + 'px';
+    plistPanel.classList.add('show');
+  }
+  function closePlistPanel(){ plistPanel.classList.remove('show'); }
+  const togglePlistPanel=()=> plistPanel.classList.contains('show') ? closePlistPanel() : openPlistPanel();
+  on(plistBtn,'click', e=>{ e.stopPropagation(); togglePlistPanel(); });
+  on(document,'click', e=>{ if(!plistPanel.contains(e.target) && e.target!==plistBtn) closePlistPanel(); });
+  on(window,'keydown', e=>{ if(e.key==='Escape') closePlistPanel(); });
+  plistPanel.addEventListener('click', (e)=>{
+    // Keep panel open while interacting inside it
+    e.stopPropagation();
+    const row = e.target.closest('.plItem');
+    if(!row) return;
+    const idx = parseInt(row.getAttribute('data-idx'),10);
+    if(e.target.closest('.x')){ removeIndex(idx); return; }
+    const wasPlaying = !video.paused && haveMetadata;
+    loadIndex(idx, {autoplay:wasPlaying});
+    // refresh to update active highlight without closing
+    rebuildPlaylistUI();
+  });
+
+  function removeIndex(i){
+    if(i<0 || i>=playlist.length) return;
+    const wasPlaying = !video.paused && haveMetadata;
+    const removingCurrent = (i===currentIndex);
+    // Revoke URL
+    const rev = revokers.splice(i,1)[0]; try{ if(rev) rev(); }catch(e){}
+    // Remove from playlist
+    playlist.splice(i,1);
+    if(!playlist.length){ clearAll(); openPlistPanel(); return; }
+    if(removingCurrent){
+      const target = Math.min(i, playlist.length-1);
+      loadIndex(target, {autoplay:wasPlaying});
+      rebuildPlaylistUI();
+    } else {
+      if(i < currentIndex) currentIndex -= 1; // shift left
+      rebuildPlaylistUI();
+    }
+    rebuildPlaylistPanel();
+  }
+
+  function clearAll(){
+    try{ video.pause(); }catch(e){}
+    video.removeAttribute('src'); video.load(); haveMetadata=false; estimatedFPS=null; pendingAutoplay=false; videoTex=null; material.map=null; material.needsUpdate=true;
+    while(revokers.length){ try{ revokers.pop()(); }catch(e){} }
+    playlist.length=0; currentIndex=-1; rebuildPlaylistUI();
+    timeSlider.disabled=true; stepBackBtn.disabled=true; stepFwdBtn.disabled=true; playBtn.disabled=true;
+    progress.hidden=true; status.classList.add('show'); introBackdrop.classList.add('show'); statusText.innerHTML = 'Drag & Drop a video here or click <b>Open</b>.';
+    tc.textContent = '00:00 / 00:00'; timeSlider.value='0'; timeSlider.max='0'; fsTimeRange.value='0'; fsTimeRange.max='0'; fsTime.textContent='00:00 / 00:00';
+    closePlistPanel(); if(plistPanel){ plistPanel.innerHTML = '<div style="padding:.6rem .8rem; color:#9aa3ad">Empty</div>'; }
+  }
+  closeAllBtn.addEventListener('click', clearAll);
+
+  // === Loading ===
+  function loadURL(url, name, {autoplay=false}={}){
+    pendingAutoplay = !!autoplay;
+    // reset camera / zoom for new video
+    try{ controls.reset(); }catch(e){}
+    try{ applyFOV(75); }catch(e){}
+    // reset fps state for new source
+    sourceFPS = null; displayFPS = null; estimatedFPS = null; updateHUD();
+    allowPlay = false; // block any unsolicited plays until we explicitly start
+
+    // reset timeline to 0 immediately (no tiny preview)
+    timeSlider.value='0'; timeSlider.max='0'; fsTimeRange.value='0'; fsTimeRange.max='0'; tc.textContent='00:00 / 00:00'; fsTime.textContent='00:00 / 00:00';
+
+    status.classList.add('show'); introBackdrop.classList.add('show'); progress.hidden=false; progress.value=0; haveMetadata=false; playBtn.disabled=true; stepBackBtn.disabled=true; stepFwdBtn.disabled=true; timeSlider.disabled=true;
+    statusText.textContent = `Loading: ${name||''}`;
+
+    videoTex=null; material.map=null; material.needsUpdate=true;
+
+    // Guard any automatic plays from the element
+    const playGuard = ()=>{ if(!allowPlay) { try{ video.pause(); }catch(e){} } };
+    video.addEventListener('play', playGuard, {once:false});
+    video.addEventListener('playing', playGuard, {once:false});
+
+    video.src = url; try{ video.pause(); }catch(e){}; video.load();
+
+    video.addEventListener('loadedmetadata', onLoadedMetadataOnce, { once:true });
+    video.addEventListener('loadeddata', onLoadedDataOnce, { once:true });
+    video.addEventListener('canplay', onCanPlayOnce, { once:true });
+    video.addEventListener('progress', onProgress);
+    video.addEventListener('error', onVideoError, { once:true });
+  }
+
+  function onLoadedMetadataOnce(){
+    initFPSFromMetadata(currentFile).catch(()=>{});
+    haveMetadata = true; try{ video.currentTime = 0; }catch(e){}
+    attachVideoTexture(); decideAndApplyMode(); refreshTex();
+    timeSlider.disabled=false; playBtn.disabled=false; stepBackBtn.disabled=false; stepFwdBtn.disabled=false;
+  }
+
+  function onLoadedDataOnce(){ refreshTex(); fitPlane(); }
+
+  function onCanPlayOnce(){
+    progress.hidden=true; status.classList.remove('show'); introBackdrop.classList.remove('show'); updateTimeUI();
+    if(pendingAutoplay){ video.currentTime = 0; allowPlay = true; video.play().catch(()=>{}); } else { allowPlay=false; video.pause(); }
+    updatePlayBtn();
+    // Measure FPS only if playing; never start playback for it
+    setTimeout(()=>{ if(!video.paused) autoEstimateFPS(); }, 600);
+  }
+
+  async function autoEstimateFPS(){
+    if(video.paused) return; // never start playback for measurement
+    let frames=0; let startMedia=null; let endMedia=null; const durationSec=0.5; const startWall=performance.now();
+    const cb=(now,meta)=>{ frames++; if(startMedia===null) startMedia = meta.mediaTime; endMedia = meta.mediaTime; if(performance.now()-startWall < durationSec*1000){ video.requestVideoFrameCallback(cb);} };
+    if(video.requestVideoFrameCallback) video.requestVideoFrameCallback(cb);
+    await new Promise(r=> setTimeout(r, durationSec*1000 + 20));
+    const delta = (endMedia!==null && startMedia!==null) ? (endMedia - startMedia) : 0;
+    const fps = delta>0 ? Math.round(frames/delta) : frames/durationSec;
+    estimatedFPS = (Number.isFinite(fps) && fps>0) ? Math.min(240, Math.max(1, Math.round(fps))) : 30;
+    if(!displayFPS && estimatedFPS) displayFPS = Math.round(estimatedFPS);
+  }
+
+  function onProgress(){ try{ if(video.buffered.length){ const end = video.buffered.end(video.buffered.length-1); const ratio = Math.min(1, (video.duration? end/video.duration : 0)); progress.value = ratio; } }catch(e){} }
+  function onVideoError(){ alert('Playback error. The codec may not be supported by this browser.'); status.classList.remove('show'); introBackdrop.classList.remove('show'); progress.hidden=true; }
+
+  // === Playback ===
+  function setPlayUI(isPlaying){
+    const svgPlay = '<svg viewBox="0 0 24 24" fill="currentColor"><path d="M8 5l10 7l-10 7z"/></svg>';
+    const svgPause = '<svg viewBox="0 0 24 24" fill="currentColor"><path d="M7 5h4v14H7zM13 5h4v14h-4z"/></svg>';
+    playLabel.textContent = isPlaying ? 'Pause' : 'Play';
+    playIcon.innerHTML = isPlaying ? svgPause : svgPlay;
+  }
+  function updatePlayBtn(){ setPlayUI(!video.paused && !video.ended); }
+  function togglePlay(){ if(!haveMetadata) return; if(video.paused){ allowPlay=true; try{ video.play(); }catch(e){} } else { allowPlay=true; video.pause(); } updatePlayBtn(); }
+  playBtn.addEventListener('click', togglePlay);
+
+  // === Smooth scrubbing (seek queue + Firefox rAF fallback) ===
+  let scrubWasPlaying = false;
+  let seeking = false;           // true while a seek is in-flight (non-FF path)
+  let pendingSeek = null;        // last requested time, if any (non-FF path)
+  let scrubRAF = null;           // firefox fallback loop handle
+  let desiredTime = null;        // firefox target time during scrubbing
+
+  function seekTo(t){
+    try{
+      if(typeof video.fastSeek==='function' && video.seekable && video.seekable.length){ video.fastSeek(t); }
+      else { video.currentTime = t; }
+    }catch(e){}
+  }
+  function queueSeek(t){
+    pendingSeek = t;
+    if(!seeking){
+      seeking = true;
+      seekTo(t);
+    }
+  }
+  function startScrubRAF(){
+    if(scrubRAF) return;
+    const tick = () => {
+      if(!isScrubbing){ scrubRAF=null; return; }
+      if(desiredTime!=null){ seekTo(desiredTime); if(videoTex) videoTex.needsUpdate = true; }
+      scrubRAF = requestAnimationFrame(tick);
+    };
+    scrubRAF = requestAnimationFrame(tick);
+  }
+
+  function beginScrub(){
+    if(!haveMetadata) return;
+    scrubWasPlaying = !video.paused;
+    if(scrubWasPlaying){ allowPlay = false; video.pause(); }
+    isScrubbing = true;
+    if(isFirefox) startScrubRAF();
+  }
+  function endScrub(){
+    isScrubbing = false;
+    if(isFirefox && scrubRAF){ cancelAnimationFrame(scrubRAF); scrubRAF=null; desiredTime=null; }
+    if(scrubWasPlaying){ allowPlay = true; video.play().catch(()=>{}); }
+    updateTimeUI();
+  }
+
+  function bindRange(el){
+    el.addEventListener('pointerdown', beginScrub);
+    el.addEventListener('touchstart', beginScrub, {passive:true});
+    el.addEventListener('input', ()=>{
+      if(!haveMetadata) return;
+      const t = parseFloat(el.value)||0;
+      // mirror to the other slider
+      if(el===timeSlider){ fsTimeRange.value = String(t); } else { timeSlider.value = String(t); }
+      if(isFirefox){ desiredTime = t; } else { queueSeek(t); }
+    });
+    el.addEventListener('change', endScrub);
+  }
+  bindRange(timeSlider); bindRange(fsTimeRange);
+
+  video.addEventListener('seeked', ()=>{
+    if(videoTex) videoTex.needsUpdate = true;
+    updateTimeUI();
+    if(pendingSeek !== null){
+      const t = pendingSeek; pendingSeek = null;
+      seekTo(t);
+    } else {
+      seeking = false;
+    }
+  });
+
+  // === Frame stepping (auto FPS) ===
+  function getFPS(){ return estimatedFPS || 30; }
+  function stepFrames(n){
+    if(!haveMetadata) return;
+    const fps = getFPS();
+    const dt = 1 / fps;
+    const next = Math.min((video.duration||0), Math.max(0,(video.currentTime||0) + n*dt));
+    const wasPlaying = !video.paused;
+    if(wasPlaying){ allowPlay=false; video.pause(); }
+    if(isFirefox){
+      seekTo(next);
+      if(videoTex) videoTex.needsUpdate = true;
+      if(wasPlaying){ allowPlay=true; video.play().catch(()=>{}); }
+      updatePlayBtn();
+      return;
+    }
+    queueSeek(next);
+    if(wasPlaying){
+      const resumeOnce = ()=>{ allowPlay=true; video.play().catch(()=>{}); video.removeEventListener('seeked', resumeOnce); };
+      video.addEventListener('seeked', resumeOnce);
+    }
+    updatePlayBtn();
+  }
+  stepBackBtn.addEventListener('click', ()=> stepFrames(-1));
+  stepFwdBtn.addEventListener('click', ()=> stepFrames(+1));
+
+  // === Wheel zoom (FOV) + slider ===
+  const applyFOV=f=>{ f=Math.min(100,Math.max(20,f)); camera.fov=f; camera.updateProjectionMatrix(); zoomSlider.value=String(Math.round(f)); fitPlane(); }
+  on(zoomSlider,'input',()=>applyFOV(parseFloat(zoomSlider.value)));
+  on(viewer,'wheel',e=>{ e.preventDefault(); applyFOV(camera.fov + (e.deltaY>0?2:-2)); }, {passive:false});
+  on(resetViewBtn,'click',()=>{ controls.reset(); applyFOV(75); panX=0; panY=0; fitPlane(); });
+
+  // === Drag & Drop and file dialog ===
+  on(viewer,'dragenter dragover', e=>{ e.preventDefault(); dropmask.classList.add('show'); });
+  on(viewer,'dragleave drop', e=>{ e.preventDefault(); dropmask.classList.remove('show'); });
+  on(viewer,'drop', e=>{ const fl=e.dataTransfer?.files; if(fl?.length) addFiles(fl); });
+  on(fileInput,'change',()=>{ if(fileInput.files?.length) addFiles(fileInput.files); });
+
+  // === Keyboard ===
+  window.addEventListener('keydown', (e)=>{
+    const k = e.code;
+    if(k==='Space'){ e.preventDefault(); playBtn.click(); }
+    else if(k==='ArrowRight' || k==='KeyD'){ e.preventDefault(); stepFrames(+1); }
+    else if(k==='ArrowLeft' || k==='KeyA'){ e.preventDefault(); stepFrames(-1); }
+    else if(k==='ArrowUp' || k==='KeyW'){ e.preventDefault(); nav(-1); }
+    else if(k==='ArrowDown' || k==='KeyS'){ e.preventDefault(); nav(1); }
+    else if(k==='KeyR'){ e.preventDefault(); resetViewBtn.click(); }
+  });
+
+  // Middle‑click (mouse wheel) toggles play/pause
+  on(viewer,'auxclick mousedown', e=>{ if(e.button===1){ e.preventDefault(); if(e.type==='auxclick') togglePlay(); } });
+
+  // === Fullscreen (cross‑browser) ===
+  function isFullscreen(){ return document.fullscreenElement || document.webkitFullscreenElement || document.msFullscreenElement || document.mozFullScreenElement; }
+  async function enterFullscreen(){ const el = viewer; const req = el.requestFullscreen || el.webkitRequestFullscreen || el.msRequestFullscreen || el.mozRequestFullScreen; if(req) { try{ await req.call(el); }catch(e){} } }
+  async function exitFullscreen(){ const ex = document.exitFullscreen || document.webkitExitFullscreen || document.msExitFullscreen || document.mozCancelFullScreen; if(ex){ try{ await ex.call(document); }catch(e){} } }
+  async function toggleFullscreen(){ if(!isFullscreen()){ await enterFullscreen(); } else { await exitFullscreen(); } }
+  on(fsBtn,'click',toggleFullscreen); on(viewer,'dblclick',toggleFullscreen);
+  on(document,'fullscreenchange webkitfullscreenchange msfullscreenchange mozfullscreenchange', ()=>{ const fs = !!isFullscreen(); fsBar.classList.toggle('show', fs); onResize(); });
+
+  // === Info panel toggle ===
+  on(infoBtn,'click',()=>{ infoPanel.style.top = overlayTopPx() + 'px'; infoPanel.classList.toggle('show'); });
+
+  // === Resize ===
+  function onResize(){ const fs=!!isFullscreen(); const w=fs?window.innerWidth:viewer.clientWidth; const h=fs?window.innerHeight:viewer.clientHeight; renderer.setSize(w,h,true); camera.aspect=w/h; camera.updateProjectionMatrix(); fitPlane(); }
+  on(window,'resize',()=>{ onResize(); infoPanel.style.top = overlayTopPx() + 'px'; if(plistPanel.classList.contains('show')) plistPanel.style.top = overlayTopPx() + 'px'; });
+  onResize();
+  infoPanel.style.top = overlayTopPx() + 'px';
+
+  // === Init ===
+  updateTimeUI();
+
+  // === FPS from metadata (mp4/webm) ===
+  function setDisplayFPSOnce(val){
+    if(displayFPS) return;
+    if(typeof val==='number' && isFinite(val) && val>0 && val<1000){
+      sourceFPS = Math.round(val);
+      displayFPS = sourceFPS;
+      updateHUD();
+    }
+  }
+  function loadScriptOnce(src){
+    return new Promise((resolve,reject)=>{ const s=document.createElement('script'); s.src=src; s.async=true; s.onload=()=>resolve(); s.onerror=()=>reject(new Error('load '+src)); document.head.appendChild(s); });
+  }
+  async function ensureMP4Box(){ if(window.MP4Box) return; await loadScriptOnce('https://unpkg.com/mp4box@0.5.4/dist/mp4box.all.min.js'); }
+  async function extractMP4FPS(file){ try{ await ensureMP4Box(); const buf = await file.arrayBuffer(); const mp4 = window.MP4Box.createFile(); return await new Promise((resolve)=>{ mp4.onReady = (info)=>{ let v = (info.videoTracks && info.videoTracks[0]) || (info.tracks||[]).find(t=>t.type==='video'); if(v && v.nb_samples && v.duration && v.timescale){ const fps = (v.nb_samples * v.timescale) / v.duration; resolve(fps); } else resolve(null); }; mp4.onError = ()=>resolve(null); buf.fileStart = 0; mp4.appendBuffer(buf); mp4.flush(); }); }catch(e){ return null; } }
+  function readVint(u, pos){ const b=u[pos]; if(b===undefined) return {length:0,value:0}; let mask=0x80, len=1; while(len<=8 && (b & mask)===0){ mask>>=1; len++; } if(len>8) return {length:1,value:0}; let value = BigInt(b & (~mask)); for(let k=1;k<len;k++){ value = (value<<8n) | BigInt(u[pos+k]||0); } return {length:len, value:Number(value)}; }
+
+  async function extractWEBMFPS(file){ try{ const buf = await file.slice(0, 1024*1024).arrayBuffer(); const u=new Uint8Array(buf); for(let i=0;i<u.length-3;i++){ // DefaultDuration ID 0x23E383
+      if(u[i]===0x23 && u[i+1]===0xE3 && u[i+2]===0x83){ let idx=i+3; const r=readVint(u, idx); const sizeLen=r.length, dataLen=r.value; if(!sizeLen||!dataLen) continue; idx+=sizeLen; if(idx+dataLen<=u.length){ let ns=0; for(let j=0;j<dataLen;j++){ ns = (ns<<8) | u[idx+j]; } if(ns>0){ const fps = 1e9 / ns; return fps; } } } } return null; }catch(e){ return null; } }
+
+  async function initFPSFromMetadata(file){ try{ if(!file) return; const type=(file.type||'').toLowerCase(); let fps=null; if(type.includes('mp4')){ fps = await extractMP4FPS(file); } else if(type.includes('webm')){ fps = await extractWEBMFPS(file); } setDisplayFPSOnce(fps); } catch(e){} }
+  // Flat-mode panning with mouse (LMB drag)
+  let panActive=false, panLX=0, panLY=0;
+  on(viewer,'pointerdown', e=>{ if(renderMode!=='flat' || e.button!==0) return; panActive=true; panLX=e.clientX; panLY=e.clientY; viewer.setPointerCapture?.(e.pointerId); e.preventDefault(); });
+  on(viewer,'pointermove', e=>{ if(!panActive || renderMode!=='flat') return; const w=renderer.domElement.clientWidth||1, h=renderer.domElement.clientHeight||1; const d=1; const vh=2*d*Math.tan(camera.fov*Math.PI/360); const vw=vh*camera.aspect; const dx=(e.clientX-panLX)/w*vw; const dy=(e.clientY-panLY)/h*vh; panX+=dx; panY-=dy; panLX=e.clientX; panLY=e.clientY; plane.position.set(panX,panY,-d); });
+  on(viewer,'pointerup pointercancel', e=>{ if(e.button===0) panActive=false; });
+</script>
+
+<script type="module">
+// === Google Drive integration (one-button), multi-domain, with IndexedDB cache ===
+// CONFIG — заполнено по вашей просьбе:
+const DRIVE_GOOGLE_CLIENT_ID = '1053048724849-jaoe9s17j4okh8esuf7ffd2lqijluat8.apps.googleusercontent.com';
+const DRIVE_FOLDER_ID        = '1zkzCbXzRoUZP7Ps1ozV3U3Mkh7GOqR1t';
+const SHARE_SCOPE            = 'domain'; // 'anyone' | 'domain'
+const DRIVE_DOMAINS          = ['dpg.email','aktd.email']; // разрешённые домены для чтения
+
+// Кэш (авто)
+const CACHE_TTL_MS = 30 * 24 * 60 * 60 * 1000;
+const CACHE_MAX_FRACTION = 0.5;
+
+// OAuth on-demand
+let driveAccessToken = null;
+let driveTokenClient = null;
+function initDriveAuth(){
+  if (!window.google || !google.accounts || !google.accounts.oauth2) return;
+  driveTokenClient = google.accounts.oauth2.initTokenClient({
+    client_id: DRIVE_GOOGLE_CLIENT_ID,
+    scope: 'https://www.googleapis.com/auth/drive',
+    callback: (resp)=>{ if (resp && resp.access_token) driveAccessToken = resp.access_token; }
+  });
+}
+window.addEventListener('load', initDriveAuth);
+function ensureDriveToken(){
+  return new Promise((resolve, reject)=>{
+    if (driveAccessToken) return resolve(driveAccessToken);
+    if (!driveTokenClient) initDriveAuth();
+    driveTokenClient.callback = (resp)=>{
+      if (resp && resp.access_token){ driveAccessToken = resp.access_token; resolve(driveAccessToken); }
+      else reject(new Error('Нет access_token'));
+    };
+    driveTokenClient.requestAccessToken({ prompt:'consent' });
+  });
+}
+
+// IndexedDB cache
+const DB_NAME='vr_video_cache'; const DB_STORE='files'; let dbPromise=null;
+function idbOpen(){
+  if (dbPromise) return dbPromise;
+  dbPromise = new Promise((resolve,reject)=>{
+    const r = indexedDB.open(DB_NAME,1);
+    r.onupgradeneeded = ()=>{
+      const db = r.result;
+      if (!db.objectStoreNames.contains(DB_STORE)){
+        const s = db.createObjectStore(DB_STORE, { keyPath:'key' });
+        s.createIndex('lastUsedAt','lastUsedAt'); s.createIndex('createdAt','createdAt');
+        s.createIndex('expiresAt','expiresAt'); s.createIndex('size','size');
+      }
+    };
+    r.onsuccess = ()=> resolve(r.result); r.onerror = ()=> reject(r.error);
+  });
+  return dbPromise;
+}
+function idbGet(key){ return idbOpen().then(db=> new Promise((res,rej)=>{ const tx=db.transaction(DB_STORE,'readonly'); const req=tx.objectStore(DB_STORE).get(key); req.onsuccess=()=>res(req.result||null); req.onerror=()=>rej(req.error); })); }
+function idbPut(rec){ return idbOpen().then(db=> new Promise((res,rej)=>{ const tx=db.transaction(DB_STORE,'readwrite'); tx.objectStore(DB_STORE).put(rec); tx.oncomplete=()=>res(true); tx.onerror=()=>rej(tx.error); })); }
+function idbDelete(key){ return idbOpen().then(db=> new Promise((res,rej)=>{ const tx=db.transaction(DB_STORE,'readwrite'); tx.objectStore(DB_STORE).delete(key); tx.oncomplete=()=>res(true); tx.onerror=()=>rej(tx.error); })); }
+function idbAll(){ return idbOpen().then(db=> new Promise((res,rej)=>{ const tx=db.transaction(DB_STORE,'readonly'); const req=tx.objectStore(DB_STORE).getAll(); req.onsuccess=()=>res(req.result||[]); req.onerror=()=>rej(req.error); })); }
+async function storageEstimate(){ if (navigator.storage && navigator.storage.estimate){ try{return await navigator.storage.estimate();}catch(e){} } return {usage:0, quota:1024*1024*1024}; }
+async function autoEvictIfNeeded(addBytes=0){
+  const now=Date.now(); const recs=await idbAll();
+  for (const r of recs){ if (r.expiresAt && r.expiresAt<=now) await idbDelete(r.key); }
+  const {usage=0, quota=1}=await storageEstimate(); const limit=quota*CACHE_MAX_FRACTION;
+  if (usage+addBytes<=limit) return;
+  const alive=(await idbAll()).sort((a,b)=> (a.lastUsedAt||0)-(b.lastUsedAt||0));
+  let cur=usage; for (const r of alive){ if (cur+addBytes<=limit) break; await idbDelete(r.key); cur-= (r.size||0); }
+}
+async function cacheGetBlob(fileId){
+  const rec=await idbGet('drive:'+fileId); if (!rec) return null;
+  if (rec.expiresAt && rec.expiresAt<=Date.now()){ await idbDelete(rec.key); return null; }
+  const blob = new Blob(rec.chunks, { type: rec.mime||'application/octet-stream' });
+  rec.lastUsedAt = Date.now(); try{ await idbPut(rec);}catch(e){}
+  return blob;
+}
+async function cachePutBlob(fileId, blob, mime){
+  const buf = await blob.arrayBuffer(); const chunk=new Uint8Array(buf);
+  await autoEvictIfNeeded(chunk.byteLength);
+  const rec = { key:'drive:'+fileId, fileId, mime: mime||blob.type||'application/octet-stream', size:chunk.byteLength, createdAt:Date.now(), lastUsedAt:Date.now(), expiresAt:Date.now()+CACHE_TTL_MS, chunks:[chunk] };
+  await idbPut(rec);
+}
+
+// Upload button
+
+function showAppLinkModal(link){
+  const modal = document.getElementById('appLinkModal');
+  if (!modal) return alert(link);
+  const input = document.getElementById('appLinkField');
+  const copy  = document.getElementById('copyAppLink');
+  const close = document.getElementById('appLinkClose');
+  const open  = document.getElementById('openAppLink');
+  if (input) input.value = link;
+  modal.classList.add('show');
+  modal.setAttribute('aria-hidden','false');
+  if (navigator.clipboard) navigator.clipboard.writeText(link).catch(()=>{});
+  if (copy) copy.onclick = ()=> { if (navigator.clipboard) navigator.clipboard.writeText(link); };
+  const hide = ()=>{ modal.classList.remove('show'); modal.setAttribute('aria-hidden','true'); };
+  if (close) close.onclick = hide;
+  const backdrop = modal.querySelector && modal.querySelector('.backdrop'); if (backdrop) backdrop.onclick = hide;
+  if (open) open.onclick = ()=> { window.location.href = link; };
+}
+
+// Upload button
+
+// === Upload button (Drive RESUMABLE upload: chunked, reliable for large files) ===
+(function(){
+  const BTN = document.getElementById('uploadAndLinkBtn');
+  if (!BTN) return;
+
+  async function pickLocalVideo(){
+    if ('showOpenFilePicker' in window){
+      try{
+        const [h] = await window.showOpenFilePicker({
+          multiple: false,
+          types: [{ description: 'Video', accept: { 'video/*': ['.mp4','.webm','.mov','.mkv','.m4v'] } }]
+        });
+        const f = await h.getFile();
+        return f;
+      }catch(e){}
+    }
+    return await new Promise((resolve)=>{
+      const inp = document.createElement('input');
+      inp.type = 'file'; inp.accept = 'video/*';
+      inp.style.position='fixed'; inp.style.left='-10000px'; inp.style.top='-10000px';
+      document.body.appendChild(inp);
+      inp.addEventListener('change', ()=>{
+        const f = inp.files && inp.files[0] ? inp.files[0] : null;
+        try{ document.body.removeChild(inp); }catch(_){}
+        resolve(f || null);
+      }, { once:true });
+      inp.click();
+    });
+  }
+
+  async function getCurrentFile(){
+    let f = null;
+    if (typeof currentFile !== 'undefined' && currentFile) f = currentFile;
+    try {
+      if (!f && typeof playlist !== 'undefined' && Array.isArray(playlist) && playlist.length){
+        const cand = (typeof currentIndex!=='undefined' ? (playlist[currentIndex]?.file) : null) || (playlist[playlist.length-1]?.file);
+        if (cand) f = cand;
+      }
+    } catch(e){}
+    if (!f && window.__lastSelectedFile) f = window.__lastSelectedFile;
+    if (!f){
+      try{
+        const v = document.querySelector('video');
+        const src = v && (v.currentSrc || v.src);
+        if (src && /^blob:/i.test(src)){
+          const b = await fetch(src).then(r=>r.blob());
+          try { f = new File([b], 'video_from_player', {type: b.type}); }
+          catch(_) { f = b; }
+        }
+      }catch(e){}
+    }
+    if (!f) f = await pickLocalVideo();
+    return f;
+  }
+
+  async function ensureToken(){
+    return new Promise((resolve, reject)=>{
+      if (!window.google || !google.accounts || !google.accounts.oauth2){
+        reject(new Error('oauth_lib_not_loaded')); return;
+      }
+      if (window.driveAccessToken) return resolve(window.driveAccessToken);
+      if (!window.driveTokenClient){
+        try{
+          window.driveTokenClient = google.accounts.oauth2.initTokenClient({
+            client_id: '1053048724849-jaoe9s17j4okh8esuf7ffd2lqijluat8.apps.googleusercontent.com',
+            scope: 'https://www.googleapis.com/auth/drive',
+            callback: (resp)=>{
+              if (resp && resp.access_token){ window.driveAccessToken = resp.access_token; resolve(window.driveAccessToken); }
+              else reject(new Error((resp && (resp.error_description || resp.error)) || 'no_access_token'));
+            }
+          });
+        }catch(e){ reject(e); return; }
+      } else {
+        window.driveTokenClient.callback = (resp)=>{
+          if (resp && resp.access_token){ window.driveAccessToken = resp.access_token; resolve(window.driveAccessToken); }
+          else reject(new Error((resp && (resp.error_description || resp.error)) || 'no_access_token'));
+        };
+      }
+      // popup (должны разрешить)
+      window.driveTokenClient.requestAccessToken({ prompt:'consent' });
+      // watchdog
+      setTimeout(()=>{
+        if (!window.driveAccessToken) reject(new Error('popup_blocked_or_denied'));
+      }, 12000);
+    });
+  }
+
+  async function createResumableSession(f){
+    const init = await fetch('https://www.googleapis.com/upload/drive/v3/files?uploadType=resumable&supportsAllDrives=true', {
+      method: 'POST',
+      headers: {
+        Authorization: 'Bearer ' + window.driveAccessToken,
+        'Content-Type': 'application/json; charset=UTF-8',
+        'X-Upload-Content-Type': (f.type || 'application/octet-stream'),
+        'X-Upload-Content-Length': String(f.size)
+      },
+      body: JSON.stringify({ name: (f.name||'video'), parents: ['1zkzCbXzRoUZP7Ps1ozV3U3Mkh7GOqR1t'] })
+    });
+    if (!init.ok) {
+      const err = await init.text().catch(()=>'');
+      throw new Error('init_fail: ' + init.status + ' ' + err);
+    }
+    const sessionUrl = init.headers.get('Location');
+    if (!sessionUrl) throw new Error('no_upload_session');
+    return sessionUrl;
+  }
+
+  async function uploadChunks(sessionUrl, f, onProgress){
+  const chunkSize = 8 * 1024 * 1024; // 8 MiB (кратно 256К)
+  let offset = 0;
+  while (offset < f.size){
+    const end = Math.min(offset + chunkSize, f.size);
+    if (!(Number.isFinite(offset) && Number.isFinite(end) && offset >= 0 && end > offset))
+      throw new Error('range_calc_error ' + offset + '-' + end + '/' + f.size);
+    const chunk = f.slice(offset, end);
+    const res = await fetch(sessionUrl, {
+      method: 'PUT',
+      headers: {
+        'Content-Type': (f.type || 'application/octet-stream'),
+        'Content-Length': String(chunk.size),
+        'Content-Range': `bytes ${offset}-${end-1}/${f.size}`
+      },
+      body: chunk
+    });
+    if (res.status === 308){
+      const rng = res.headers.get('Range'); // e.g., "bytes=0-1048575"
+      if (rng){
+        const m = rng.match(/(\d+)-(\d+)$/);
+        offset = m ? (parseInt(m[2],10) + 1) : end;
+      } else {
+        offset = end;
+      }
+      if (onProgress) onProgress(offset, f.size);
+      continue;
+    }
+    if (!res.ok){
+      const t = await res.text().catch(()=>'');
+      throw new Error('chunk_fail: ' + res.status + ' ' + t);
+    }
+    const data = await res.json();
+    return data; // { id, ... }
+  }
+  throw new Error('unexpected_end');
+}
+
+  BTN.addEventListener('click', async (ev)=>{
+    ev.preventDefault(); ev.stopImmediatePropagation();
+    try{
+      const f = await getCurrentFile();
+      if (!f){ alert('Нет выбранного файла. Добавьте видео или выберите файл в диалоге.'); return; }
+
+      await ensureToken();
+
+      // UI progress (optional if present)
+      const status = document.getElementById('status');
+      const intro  = document.getElementById('introBackdrop');
+      const prog   = document.getElementById('progress');
+      const stxt   = document.getElementById('statusText');
+      try{ if(status&&intro){ status.classList.add('show'); intro.classList.add('show'); if(stxt) stxt.textContent='Uploading to Drive…'; if(prog){ prog.value=0; prog.max=1; } } }catch(e){}
+
+      const sessionUrl = await createResumableSession(f);
+      const fileInfo = await uploadChunks(sessionUrl, f, (done,total)=>{ try{ if(prog) prog.value = total ? (done/total) : 0; }catch(e){} });
+
+      try{ if(document.getElementById('status')&&document.getElementById('introBackdrop')){ document.getElementById('status').classList.remove('show'); document.getElementById('introBackdrop').classList.remove('show'); } }catch(e){}
+
+      const fileId = fileInfo && fileInfo.id;
+      if (!fileId) throw new Error('no_file_id');
+
+      // Permissions: domains
+      for (const dom of ['dpg.email','aktd.email']){
+        await fetch(`https://www.googleapis.com/drive/v3/files/${fileId}/permissions?supportsAllDrives=true`, {
+          method: 'POST',
+          headers: { Authorization:'Bearer ' + window.driveAccessToken, 'Content-Type':'application/json' },
+          body: JSON.stringify({ type:'domain', role:'reader', domain: dom, allowFileDiscovery: false })
+        });
+      }
+
+      const metaRes = await fetch(`https://www.googleapis.com/drive/v3/files/${fileId}?fields=id,name,webViewLink&supportsAllDrives=true`, {
+        headers: { Authorization:'Bearer ' + window.driveAccessToken }
+      });
+      const info = await metaRes.json().catch(()=>({}));
+
+      const appLink = location.origin + location.pathname + '?id=' + encodeURIComponent(fileId);
+      showAppLinkModal(appLink);
+
+    }catch(e){
+      const msg = (e && e.message) || String(e);
+      if (msg.includes('popup_blocked_or_denied')){
+        alert('Окно авторизации Google заблокировано или закрыто. Разрешите всплывающие окна для этого сайта и повторите.');
+      } else if (msg.includes('oauth_lib_not_loaded')){
+        alert('Не загрузилась библиотека Google OAuth (accounts.google.com). Проверьте Authorized JavaScript origins и политику блокировщиков.');
+      } else {
+        alert('Upload failed: ' + msg);
+      }
+    }
+  }, true);
+})();
+// Open by ?id: pull from Drive (once), cache, then play via original loadURL
+async function fetchDriveFileToBlob(fileId){
+  await ensureDriveToken();
+  const url = `https://www.googleapis.com/drive/v3/files/${encodeURIComponent(fileId)}?alt=media&supportsAllDrives=true`;
+  const r = await fetch(url, { headers:{ Authorization:'Bearer '+driveAccessToken } });
+  if(!r.ok) throw new Error('Drive fetch failed: '+r.status);
+  const contentType = r.headers.get('Content-Type') || 'application/octet-stream';
+  const reader = r.body.getReader();
+  const chunks = []; let received=0;
+  try{ const status=document.getElementById('status'), intro=document.getElementById('introBackdrop'), progress=document.getElementById('progress'), statusText=document.getElementById('statusText'); if(status && intro){ status.classList.add('show'); intro.classList.add('show'); if(progress){progress.value=0;progress.max=1;} if(statusText) statusText.textContent='Downloading from Drive…'; } }catch(e){}
+  const total = Number(r.headers.get('Content-Length')||0);
+  while(true){
+    const {done, value} = await reader.read();
+    if(done) break;
+    chunks.push(value); received += value.byteLength;
+    if (total>0){ const pr=document.getElementById('progress'); if(pr){ pr.value = received/total; } }
+  }
+  try{ const status=document.getElementById('status'), intro=document.getElementById('introBackdrop'); if(status && intro){ status.classList.remove('show'); intro.classList.remove('show'); } }catch(e){}
+  return new Blob(chunks, { type: contentType });
+}
+async function loadFromCacheOrDrive(fileId){
+  let blob = await cacheGetBlob(fileId);
+  if(!blob){ blob = await fetchDriveFileToBlob(fileId); try{ await cachePutBlob(fileId, blob, blob.type);}catch(e){} }
+  const url = URL.createObjectURL(blob);
+  // Вызовем существующую функцию loadURL из оригинального кода
+  if (typeof loadURL === 'function'){ loadURL(url, 'drive:'+fileId, {autoplay:false}); }
+}
+(function(){
+  const u = new URL(location.href);
+  const id = u.searchParams.get('id');
+  if (!id) return;
+  (async ()=>{
+    try{
+      await ensureToken();
+      await loadFromCacheOrDrive(id);
+    }catch(e){
+      const t = document.getElementById('toolbar') || document.body;
+      const b = document.createElement('button');
+      b.className = 'btn'; b.textContent = 'Open video';
+      b.title = 'Authorize Google Drive and open the video';
+      b.onclick = async ()=>{
+        try{ await ensureToken(); await loadFromCacheOrDrive(id); b.remove(); }
+        catch(err){ alert((err && err.message) || String(err)); }
       };
-      toolbar.appendChild(btn);
+      t.appendChild(b);
     }
   })();
-})();})();
+})();
 </script>
 
 
