@@ -110,6 +110,10 @@
 .copy-icon{ display:inline-flex; align-items:center; justify-content:center; border:1px solid #343842; background:#15171c; color:#fff; border-radius:8px; padding:.5rem .6rem; cursor:pointer; }
 .copy-icon svg{ width:16px; height:16px; }
 </style>
+
+<style id="downloadModalTweaks">
+#downloadModal .status { margin-left:auto; font-size:12px; opacity:.8; }
+</style>
 </head>
 <body>
 
@@ -850,15 +854,25 @@ async function cachePutBlob(fileId, blob, mime){
 // Upload button
 
 function showAppLinkModal(link){
-  const modal = document.getElementById('appLinkModal');
-  const input = document.getElementById('appLinkField');
-  const copy  = document.getElementById('copyAppLink');
-  const close = document.getElementById('appLinkClose');
-  if (input) input.value = link;
-  modal.style.display = 'flex';
-  modal.setAttribute('aria-hidden','false');
-  async function copyText(t){
-    try { await navigator.clipboard.writeText(t); return true; }
+  try{
+    const modal = document.getElementById('appLinkModal');
+    const input = document.getElementById('appLinkField');
+    const copy  = document.getElementById('copyAppLink');
+    const close = document.getElementById('appLinkClose');
+    if (input) input.value = link;
+    if (modal){ modal.style.display='flex'; modal.setAttribute('aria-hidden','false'); }
+    // try to copy (best-effort only)
+    (async () => {
+      try { await navigator.clipboard.writeText(link); } catch(_){ try{ if (input){ input.select(); document.execCommand('copy'); } }catch(__){} }
+    })();
+    if (copy) copy.onclick = ()=>{
+      try{ navigator.clipboard.writeText(link); }catch(_){ try{ if (input){ input.select(); document.execCommand('copy'); } }catch(__){} }
+    };
+    const hide = ()=>{ if (modal){ modal.style.display='none'; modal.setAttribute('aria-hidden','true'); } };
+    if (close) close.onclick = hide;
+    const backdrop = modal && modal.querySelector('.modal-backdrop'); if (backdrop) backdrop.onclick = hide;
+  }catch(e){ console.warn('showAppLinkModal error', e); }
+}
     catch(e){ try{ if (input){ input.select(); document.execCommand('copy'); return true; } }catch(_){} return false; }
   }
   copy.onclick = ()=> { copyText(link); };
@@ -1364,7 +1378,8 @@ async function loadFromCacheOrDrive(fileId){
       <span class="modal-muted">Sign in to your Google account to download and play this video.</span>
     </div>
     <div class="modal-footer">
-      <span></span>
+      <span class="modal-muted"></span>
+      <div class="status" id="dlStatus"></div>
       <button id="downloadConfirm" class="modal-btn">Download Video</button>
     </div>
   </div>
@@ -1378,6 +1393,11 @@ async function loadFromCacheOrDrive(fileId){
   if (!fileId) return;
 
   const $ = (id)=>document.getElementById(id);
+  const modal = $('downloadModal');
+  const btn   = $('downloadConfirm');
+  const stat  = $('dlStatus');
+
+  function setStatus(t){ if (stat) stat.textContent = t || ''; }
 
   async function ensureTokenInteractive(){
     if (window.driveAccessToken) return window.driveAccessToken;
@@ -1405,12 +1425,26 @@ async function loadFromCacheOrDrive(fileId){
   async function fetchDriveFileToBlob(id){
     const url = `https://www.googleapis.com/drive/v3/files/${encodeURIComponent(id)}?alt=media&supportsAllDrives=true`;
     const r = await fetch(url, { headers:{ Authorization:'Bearer '+window.driveAccessToken } });
-    if (!r.ok) throw new Error('Drive fetch failed: ' + r.status);
-    return await r.blob();
+    if (!r.ok) {
+      let msg = 'Drive fetch failed: ' + r.status;
+      try{ const j = await r.json(); if (j && j.error && j.error.message) msg += ' — ' + j.error.message; }catch(_){};
+      throw new Error(msg);
+    }
+    // Stream to blob to show progress
+    const reader = r.body && r.body.getReader ? r.body.getReader() : null;
+    if (!reader) return await r.blob();
+    const chunks = []; let recvd = 0, total = Number(r.headers.get('Content-Length')||0);
+    while(true){
+      const {done, value} = await reader.read();
+      if (done) break;
+      chunks.push(value); recvd += value.byteLength;
+      if (total) setStatus(((recvd/total*100)|0) + '%');
+    }
+    setStatus('');
+    return new Blob(chunks, { type: r.headers.get('Content-Type') || 'application/octet-stream' });
   }
 
   async function trySilent(){
-    // try to silently obtain token if user already granted
     try{
       if (!window.driveAccessToken && window.google && google.accounts && google.accounts.oauth2){
         if (!window.driveTokenClient){
@@ -1433,6 +1467,7 @@ async function loadFromCacheOrDrive(fileId){
         });
       }
       if (!window.driveAccessToken) throw new Error('needs_user_gesture');
+      setStatus('');
       const blob = await fetchDriveFileToBlob(fileId);
       const url = URL.createObjectURL(blob);
       if (typeof loadURL === 'function') loadURL(url, 'drive:'+fileId, {autoplay:false});
@@ -1443,30 +1478,31 @@ async function loadFromCacheOrDrive(fileId){
   (async ()=>{
     const ok = await trySilent();
     if (ok) return;
-    // show download modal
-    const modal = $('downloadModal');
-    const btn = $('downloadConfirm');
     if (modal && btn){
       modal.style.display='flex';
       modal.setAttribute('aria-hidden','false');
       btn.onclick = async ()=>{
         try{
+          setStatus('Sign-in…');
           await ensureTokenInteractive();
-          modal.style.display='none';
+          setStatus('Downloading…');
           const blob = await fetchDriveFileToBlob(fileId);
           const url = URL.createObjectURL(blob);
           if (typeof loadURL === 'function') loadURL(url, 'drive:'+fileId, {autoplay:false});
+          setStatus('');
+          modal.style.display='none';
+          modal.setAttribute('aria-hidden','true');
         }catch(err){
-          alert((err && err.message) || String(err));
+          setStatus(err && err.message ? err.message : String(err));
         }
       };
-      // close by clicking backdrop
       const backdrop = modal.querySelector('.modal-backdrop');
       if (backdrop) backdrop.onclick = ()=>{ modal.style.display='none'; modal.setAttribute('aria-hidden','true'); };
     }
   })();
 })();
 </script>
+
 
 </body>
 </html>
