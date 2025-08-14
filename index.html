@@ -1241,5 +1241,204 @@ async function loadFromCacheOrDrive(fileId){
   </div>
 </div>
 
+
+<script>
+// === Upload&Link robust binder (non-intrusive) ===
+(function(){
+  if (window.__uploadAndLinkBinderInstalled) return; 
+  window.__uploadAndLinkBinderInstalled = true;
+
+  const CLIENT_ID = '1053048724849-jaoe9s17j4okh8esuf7ffd2lqijluat8.apps.googleusercontent.com';
+  const DRIVE_FOLDER_ID = '1zkzCbXzRoUZP7Ps1ozV3U3Mkh7GOqR1t';
+  const DOMAINS = (window.DRIVE_DOMAINS && Array.isArray(window.DRIVE_DOMAINS)) ? window.DRIVE_DOMAINS : ['dpg.email','aktd.email'];
+
+  // helpers
+  async function __getCurrentFile(){
+    // app-specific
+    try{ if (typeof currentFile !== 'undefined' && currentFile) return currentFile; }catch(_){}
+    try{
+      if (typeof playlist !== 'undefined' && Array.isArray(playlist) && playlist.length){
+        const i = (typeof currentIndex !== 'undefined' && currentIndex>=0) ? currentIndex : (playlist.length-1);
+        const cand = playlist[i] && (playlist[i].file || playlist[i]);
+        if (cand) return cand;
+      }
+    }catch(_){}
+    // last selected via captures
+    if (window.__lastSelectedFile) return window.__lastSelectedFile;
+    // input[type=file]
+    try{
+      const inp = document.querySelector('input[type="file"]');
+      if (inp && inp.files && inp.files[0]) return inp.files[0];
+    }catch(_){}
+    // blob from video
+    try{
+      const v = document.querySelector('video');
+      const src = v && (v.currentSrc || v.src);
+      if (src && /^blob:/i.test(src)){
+        const b = await fetch(src).then(r=>r.blob());
+        try { return new File([b], 'video_from_player', {type: b.type}); }
+        catch(_) { return b; }
+      }
+    }catch(_){}
+    return null;
+  }
+
+  function __initTokenClient(){
+    if (!window.google || !google.accounts || !google.accounts.oauth2) throw new Error('oauth_lib_not_loaded');
+    if (!window.driveTokenClient){
+      window.driveTokenClient = google.accounts.oauth2.initTokenClient({
+        client_id: CLIENT_ID,
+        scope: 'https://www.googleapis.com/auth/drive',
+        callback: (resp)=>{
+          if (resp && resp.access_token){ window.driveAccessToken = resp.access_token; localStorage.setItem('drive_oauth_granted','1'); }
+        }
+      });
+    }
+  }
+
+  async function __ensureTokenInteractive(){
+    if (window.driveAccessToken) return window.driveAccessToken;
+    __initTokenClient();
+    return await new Promise((resolve, reject)=>{
+      try{
+        window.driveTokenClient.callback = (resp)=>{
+          if (resp && resp.access_token){ window.driveAccessToken = resp.access_token; localStorage.setItem('drive_oauth_granted','1'); resolve(window.driveAccessToken); }
+          else reject(new Error((resp && (resp.error_description||resp.error)) || 'no_access_token'));
+        };
+        window.driveTokenClient.requestAccessToken({ prompt: 'consent' });
+      }catch(e){ reject(e); }
+    });
+  }
+
+  // createResumableSession / uploadChunks — use existing or define safe fallbacks
+  async function __createResumableSession(f){
+    if (typeof createResumableSession === 'function') return await createResumableSession(f);
+    const init = await fetch('https://www.googleapis.com/upload/drive/v3/files?uploadType=resumable&supportsAllDrives=true', {
+      method: 'POST',
+      headers: {
+        Authorization: 'Bearer ' + window.driveAccessToken,
+        'Content-Type': 'application/json; charset=UTF-8',
+        'X-Upload-Content-Type': (f.type || 'application/octet-stream'),
+        'X-Upload-Content-Length': String(f.size)
+      },
+      body: JSON.stringify({ name: (f.name || 'video'), parents: [DRIVE_FOLDER_ID] })
+    });
+    if (!init.ok){ const t = await init.text().catch(()=> ''); throw new Error('init_fail ' + init.status + ' ' + t); }
+    const loc = init.headers.get('Location');
+    if (!loc) throw new Error('no_upload_session_location');
+    return loc;
+  }
+
+  async function __uploadChunks(sessionUrl, f, onProgress){
+    if (typeof uploadChunks === 'function') return await uploadChunks(sessionUrl, f, onProgress);
+    const chunkSize = 8 * 1024 * 1024;
+    let offset = 0;
+    while (offset < f.size){
+      const end = Math.min(offset + chunkSize, f.size);
+      if (!(Number.isFinite(offset) && Number.isFinite(end) && offset >= 0 && end > offset))
+        throw new Error('range_calc_error ' + offset + '-' + end + '/' + f.size);
+      const chunk = f.slice(offset, end);
+      const res = await fetch(sessionUrl, {
+        method: 'PUT',
+        headers: {
+          'Content-Type': (f.type || 'application/octet-stream'),
+          'Content-Length': String(chunk.size),
+          'Content-Range': `bytes ${offset}-${end-1}/${f.size}`
+        },
+        body: chunk
+      });
+      if (res.status === 308){
+        const rng = res.headers.get('Range');
+        if (rng){
+          const m = rng.match(/(\\d+)-(\\d+)$/);
+          offset = m ? (parseInt(m[2],10) + 1) : end;
+        } else offset = end;
+        if (onProgress) onProgress(offset, f.size);
+        continue;
+      }
+      if (!res.ok){ const t = await res.text().catch(()=> ''); throw new Error('chunk_fail ' + res.status + ' ' + t); }
+      const data = await res.json();
+      return data;
+    }
+    throw new Error('unexpected_end');
+  }
+
+  async function __uploadAndLink(ev){
+    if (ev){ ev.preventDefault(); ev.stopPropagation(); }
+    try{
+      let f = await __getCurrentFile();
+      if (!f){ alert('Add a local video first (Open or drag & drop).'); return; }
+
+      await __ensureTokenInteractive();
+
+      // progress overlay if present
+      try{
+        const status = document.getElementById('status');
+        const intro  = document.getElementById('introBackdrop');
+        const prog   = document.getElementById('progress');
+        const stxt   = document.getElementById('statusText');
+        if(status&&intro){ status.classList.add('show'); intro.classList.add('show'); if(stxt) stxt.textContent='Uploading to Drive…'; if(prog){ prog.value=0; prog.max=1; } }
+      }catch(_){}
+
+      const session = await __createResumableSession(f);
+      const info = await __uploadChunks(session, f, (done,total)=>{
+        try{ const prog = document.getElementById('progress'); if(prog){ prog.value = total ? (done/total) : 0; } }catch(_){}
+      });
+
+      try{
+        const status = document.getElementById('status');
+        const intro  = document.getElementById('introBackdrop');
+        if(status&&intro){ status.classList.remove('show'); intro.classList.remove('show'); }
+      }catch(_){}
+
+      const fileId = info && info.id; if (!fileId) throw new Error('no_file_id');
+
+      // Set permissions in background
+      try{
+        for (const dom of DOMAINS){
+          fetch(`https://www.googleapis.com/drive/v3/files/${fileId}/permissions?supportsAllDrives=true`, {
+            method:'POST',
+            headers:{ Authorization:'Bearer '+window.driveAccessToken, 'Content-Type':'application/json' },
+            body: JSON.stringify({ type:'domain', role:'reader', domain: dom, allowFileDiscovery:false })
+          }).catch(()=>{});
+        }
+      }catch(_){}
+
+      const appLink = location.origin + location.pathname + '?id=' + encodeURIComponent(fileId);
+      if (typeof showAppLinkModal === 'function') showAppLinkModal(appLink); else alert(appLink);
+    }catch(e){
+      const msg = (e && e.message) || String(e);
+      if (msg.includes('oauth_lib_not_loaded')){
+        alert('Google OAuth library did not load (accounts.google.com). Check Authorized JavaScript origins and content blockers.');
+      } else if (msg.includes('popup_blocked_or_denied')){
+        alert('Google OAuth popup was blocked/closed. Allow pop-ups for this site and try again.');
+      } else {
+        alert('Upload failed: ' + msg);
+      }
+    }
+  }
+  window.__uploadAndLink = __uploadAndLink; // for console testing
+
+  function bind(){
+    const btn = document.getElementById('uploadAndLinkBtn');
+    if (btn){
+      btn.removeAttribute('disabled');
+      btn.addEventListener('click', __uploadAndLink, true);
+      btn.addEventListener('click', __uploadAndLink, false);
+    }
+  }
+
+  // Delegate too (covers dynamic UIs)
+  document.addEventListener('click', function(e){
+    const t = e.target;
+    const btn = t && (t.id === 'uploadAndLinkBtn' ? t : (t.closest && t.closest('#uploadAndLinkBtn')));
+    if (btn){ __uploadAndLink(e); }
+  }, true);
+
+  if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', bind);
+  else bind();
+})();
+</script>
+
 </body>
 </html>
