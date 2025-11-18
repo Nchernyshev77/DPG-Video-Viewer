@@ -69,7 +69,12 @@
     #plistDock{position:absolute; left:8px; top:44px; z-index:3}
     #plistDock .btn{width:auto}
 
-    #hud{position:absolute; top:8px; left:8px; z-index:3; background:#101010cc; border:1px solid #2a2a2a; padding:.25rem .5rem; border-radius:8px; font-size:.9rem; color:#d8d8d8}
+    #hud{position:absolute; top:8px; left:8px; z-index:3; background:#101010cc; border:1px solid #2a2a2a; padding:.25rem .5rem; border-radius:8px; font-size:.9rem; color:#d8d8d8;
+  white-space: nowrap;
+
+  display:inline-flex;
+  align-items:center;
+}
     #hud .sep{opacity:.6; margin:0 .25rem}
 
     /* Info panel */
@@ -126,17 +131,60 @@
 
 /* HUD frame-jump input */
 #hud input#frameJumpInput{
-  width: 8ch;
   font: inherit;
   color: var(--text);
-  background: #00000080;
-  border: 1px solid #2a2a2a;
+  background: var(--bg-soft, #1b1b1b);
+  border: 1px solid var(--line);
   border-radius: 6px;
   padding: 0 .25rem;
   outline: none;
+  display:inline-block;
+  vertical-align:middle;
+  min-width:8ch;
+  width:auto;
+  line-height:1.2;
 }
-#hud input#frameJumpInput:focus{ border-color: var(--accent); }
+#hud input#frameJumpInput:focus{
+  border-color: var(--accent);
+  background: var(--bg, #0f0f10);
+}
+/* Hide steppers (only for frameJumpInput) — жёстко, для всех движков */
+#hud input#frameJumpInput::-webkit-outer-spin-button,
+#hud input#frameJumpInput::-webkit-inner-spin-button{
+  -webkit-appearance:none !important;
+  margin:0 !important;
+}
+#hud input#frameJumpInput[type="number"]{
+  -moz-appearance:textfield !important;
+}
+#hud input#frameJumpInput{
+  -webkit-appearance:none !important;
+  appearance:none !important;
+}
 
+/* --- Fix: Firefox blue focus outline persisting on central intro button --- */
+#status:focus { outline: none !important; }
+#status:focus-visible { outline: none !important; box-shadow: none !important; }
+#status::-moz-focus-inner { border: 0; }
+
+#hud #hudFrame{
+  display:inline-flex;
+  align-items:center;
+  flex-wrap:nowrap;
+  gap:.25rem;
+}
+#hud #hudFrame > *{
+  flex:0 0 auto;
+}
+
+/* === Force‑hide number steppers for frameJumpInput (all major engines) === */
+/* Chromium / Edge / Safari (WebKit/Blink) */
+#hud input#frameJumpInput::-webkit-outer-spin-button,
+#hud input#frameJumpInput::-webkit-inner-spin-button { -webkit-appearance: none !important; margin: 0 !important; }
+/* Firefox */
+#hud input#frameJumpInput[type="number"] { -moz-appearance: textfield !important; }
+/* Standard + iOS Safari fallback */
+#hud input#frameJumpInput { -webkit-appearance: none !important; appearance: none !important; }
 </style>
 </head>
 <body>
@@ -220,17 +268,20 @@
     <div class="body">
       <dl>
         <dt>Play / Pause</dt><dd>Space or Left click</dd>
+        <dt>Move</dt><dd>Mouse drag</dd>
+        <dt>Zoom</dt><dd>Mouse wheel</dd>
         <dt>Step −1 frame</dt><dd>← or A</dd>
         <dt>Step +1 frame</dt><dd>→ or D</dd>
         <dt>Prev video</dt><dd>↑ or W</dd>
         <dt>Next video</dt><dd>↓ or S</dd>
-                <dt>Look around</dt><dd>Mouse drag (inverted)</dd>
-        <dt>Zoom</dt><dd>Mouse wheel</dd>
-      <dt>Reset view</dt><dd>R</dd>
-      
+        <dt>Reset view</dt><dd>R</dd>
+        <dt>Open playlist</dt><dd>E</dd>
         <dt>Close all (playlist)</dt><dd>Q</dd>
-        <dt>Close all (playlist icon)</dt><dd>Right Click</dd>
-</dl>
+        <dt>Close all (playlist icon)</dt><dd>Right click</dd>
+        <dt>Open info</dt><dd>I</dd>
+        <dt>Open file</dt><dd>O</dd>
+        <dt>Select frame</dt><dd>Left click on frames</dd>
+      </dl>
     </div>
   </aside>
 </div>
@@ -707,7 +758,9 @@ plistPanel.addEventListener('click', (e)=>{
 try{ displayFPS = null; }catch(_){ }
     try{ updateHUD(true); }catch(_){ }
 timeSlider.disabled=true; stepBackBtn.disabled=true; stepFwdBtn.disabled=true; playBtn.disabled=true;
-    progress.hidden=true; status.classList.add('show'); introBackdrop.classList.add('show'); statusText.innerHTML = 'Drag & Drop a video here or <b>click here</b>.';
+    progress.hidden=true; status.classList.add('show');
+    try{ if(window.__uiShowMenus) window.__uiShowMenus(); }catch(_){ }
+    try{ document.getElementById('viewer')?.classList.remove('ui-autoHide'); }catch(_){ } introBackdrop.classList.add('show'); statusText.innerHTML = 'Drag & Drop a video here or <b>click here</b>.';
     tc.textContent = '00:00 / 00:00'; timeSlider.value='0'; timeSlider.max='0'; fsTimeRange.value='0'; fsTimeRange.max='0'; fsTime.textContent='00:00 / 00:00';
     closePlistPanel(); if(plistPanel){ plistPanel.innerHTML = '<div style="padding:.6rem .8rem; color:#9aa3ad">Empty</div>'; }
   
@@ -1031,8 +1084,18 @@ function defaultFOV(){ try{ return (renderMode==='flat') ? (80 - 2*WHEEL_STEP) :
 
   // === Drag & Drop and file dialog ===
 
-  on(dropmask,'dragover', e=>{ e.preventDefault(); });
-
+// Ensure overlays accept drops (prevents files=0 when overlay on top)
+try{
+  if (typeof introBackdrop!=='undefined' && introBackdrop) {
+    on(introBackdrop,'dragover', e=>{ e.preventDefault(); e.stopPropagation(); if(e.dataTransfer) e.dataTransfer.dropEffect='copy'; }, {passive:false});
+    on(introBackdrop,'drop', e=>{ e.preventDefault(); e.stopPropagation(); const fl=e.dataTransfer?.files; if(fl?.length) addFiles(fl); }, {passive:false});
+  }
+  if (typeof dropmask!=='undefined' && dropmask && !dropmask.__dndRebind){
+    on(dropmask,'dragover', e=>{ e.preventDefault(); e.stopPropagation(); if(e.dataTransfer) e.dataTransfer.dropEffect='copy'; }, {passive:false});
+    on(dropmask,'drop', e=>{ e.preventDefault(); e.stopPropagation(); const fl=e.dataTransfer?.files; if(fl?.length) addFiles(fl); }, {passive:false});
+    dropmask.__dndRebind = true;
+  }
+}catch(_){}
   on(status,'dragover', e=>{ e.preventDefault(); });
 
   // Accept drops on overlays to avoid misses when they cover the viewer
@@ -1041,13 +1104,49 @@ function defaultFOV(){ try{ return (renderMode==='flat') ? (80 - 2*WHEEL_STEP) :
       on(status,'drop', e=>{ e.preventDefault(); e.stopPropagation(); const fl=e.dataTransfer?.files; if(fl?.length) addFiles(fl); });
     }
     if (typeof dropmask!=='undefined' && dropmask) {
-      on(dropmask,'drop', e=>{ e.preventDefault(); e.stopPropagation(); const fl=e.dataTransfer?.files; if(fl?.length) addFiles(fl); });
     }
   }catch(_){}
-  on(viewer,'dragenter dragover', e=>{ e.preventDefault(); dropmask.classList.add('show'); });
-  on(viewer,'dragleave drop', e=>{ e.preventDefault(); dropmask.classList.remove('show'); });
-  on(viewer,'drop', e=>{ const fl=e.dataTransfer?.files; if(fl?.length) addFiles(fl); });
-  on(fileInput,'change',()=>{ if(fileInput.files?.length) addFiles(fileInput.files); 
+
+  // Global drag highlight: keep dropmask working even after clearAll / overlays
+  (function(){
+    let dragDepth = 0;
+    function showMask(){ try{ dropmask && dropmask.classList.add('show'); }catch(_){ } }
+    function hideMask(){ try{ dropmask && dropmask.classList.remove('show'); }catch(_){ } }
+    ['dragenter','dragover','dragleave','drop'].forEach(type=>{
+      document.addEventListener(type, e=>{
+        try{
+          const dt = e.dataTransfer;
+          // React only when real files are being dragged
+          if(dt && dt.types && !Array.from(dt.types).includes('Files')) return;
+          if(type==='dragenter'){
+            e.preventDefault();
+            dragDepth++;
+            showMask();
+          }else if(type==='dragover'){
+            e.preventDefault();
+            if(dt) dt.dropEffect = 'copy';
+          }else if(type==='dragleave'){
+            e.preventDefault();
+            dragDepth = Math.max(0, dragDepth-1);
+            if(dragDepth===0) hideMask();
+          }else{ // drop
+            e.preventDefault();
+            dragDepth = 0;
+            hideMask();
+          }
+        }catch(_){}
+      }, {capture:true, passive:false});
+    });
+  })();
+
+  // Accept drops on the viewer background (when overlays don't already handle it)
+  on(viewer,'drop', e=>{
+    e.preventDefault();
+    const fl = e.dataTransfer?.files;
+    if (fl?.length) addFiles(fl);
+  });
+
+on(fileInput,'change',()=>{ if(fileInput.files?.length) addFiles(fileInput.files); 
   try{ fileInput.value=''; }catch(_){ }});
 
   // === Keyboard ===
@@ -1059,7 +1158,12 @@ function defaultFOV(){ try{ return (renderMode==='flat') ? (80 - 2*WHEEL_STEP) :
     else if(k==='ArrowUp' || k==='KeyW'){ e.preventDefault(); nav(-1); }
     else if(k==='ArrowDown' || k==='KeyS'){ e.preventDefault(); nav(1); }
     else if(k==='KeyR'){ e.preventDefault(); resetViewBtn.click(); }
-  
+    else if(k==='KeyE'){ e.preventDefault(); try{ togglePlistPanel(); }catch(_){ } }
+    else if(k==='KeyI'){ e.preventDefault(); try{ infoBtn.click(); }catch(_){ } }
+    else if(k==='KeyO'){ e.preventDefault(); try{ fileInput.click(); }catch(_){ } }
+
+    else if(k==='KeyE'){ e.preventDefault(); try{ togglePlistPanel(); }catch(_){ } }
+    else if(k==='KeyI'){ e.preventDefault(); try{ infoBtn.click(); }catch(_){ } }
     else if(k==='KeyQ'){ e.preventDefault(); try{ clearAll(); }catch(_){ } }
     else if(k==='Escape'){ e.preventDefault(); try{ closePlistPanel(); }catch(_){ } try{ closeInfoPanel(); }catch(_){ } }
   });
@@ -1067,11 +1171,70 @@ function defaultFOV(){ try{ return (renderMode==='flat') ? (80 - 2*WHEEL_STEP) :
   // Left-click toggles play/pause (click, not drag)
   let clickSingleTimer = null;
   let tapX=0,tapY=0,tapT=0,tapMoved=false;
+
+  function inLeftUiCluster(e){
+    try{
+      const v = viewer;
+      if(!v) return false;
+      if (v.classList && v.classList.contains('ui-autoHide')) return false;
+
+      const hudEl  = document.getElementById('hud')       || window.hud;
+      const dockEl = document.getElementById('plistDock') || window.plistDock;
+      const rects = [];
+      if (hudEl)  rects.push(hudEl.getBoundingClientRect());
+      if (dockEl) rects.push(dockEl.getBoundingClientRect());
+      if (!rects.length) return false;
+
+      let left=rects[0].left, top=rects[0].top,
+          right=rects[0].right, bottom=rects[0].bottom;
+      for (let i=1;i<rects.length;i++){
+        const r = rects[i]; if(!r) continue;
+        if (r.left   < left)   left   = r.left;
+        if (r.top    < top)    top    = r.top;
+        if (r.right  > right)  right  = r.right;
+        if (r.bottom > bottom) bottom = r.bottom;
+      }
+
+      const x = e.clientX, y = e.clientY;
+      return x >= left && x <= right && y >= top && y <= bottom;
+    }catch(_){
+      return false;
+    }
+  }
+
   on(viewer,'pointerdown', e=>{
-    if (e.target && e.target.closest && (e.target.closest('#toolbar') || e.target.closest('#fsBar') || e.target.closest('#plistDock') || e.target.closest('#infoBtn') || e.target.closest('#plistBtn'))) return; if(e.button!==0) return; tapX=e.clientX; tapY=e.clientY; tapT=performance.now(); tapMoved=false; });
-  on(viewer,'pointermove', e=>{ if((e.buttons&1)===1 && (Math.abs(e.clientX-tapX)>5 || Math.abs(e.clientY-tapY)>5)) tapMoved=true; });
+    if (inLeftUiCluster(e)) return;
+    if (e.target && e.target.closest &&
+        (e.target.closest('#toolbar') ||
+         e.target.closest('#fsBar') ||
+         e.target.closest('#plistDock') ||
+         e.target.closest('#infoBtn') ||
+         e.target.closest('#plistBtn'))) return;
+    if(e.button!==0) return;
+    tapX=e.clientX; tapY=e.clientY; tapT=performance.now(); tapMoved=false;
+  });
+
+  on(viewer,'pointermove', e=>{
+    if((e.buttons&1)===1 && (Math.abs(e.clientX-tapX)>5 || Math.abs(e.clientY-tapY)>5))
+      tapMoved=true;
+  });
+
   on(viewer,'pointerup', e=>{
-    if (e.target && e.target.closest && (e.target.closest('#toolbar') || e.target.closest('#fsBar') || e.target.closest('#plistDock') || e.target.closest('#infoBtn') || e.target.closest('#plistBtn'))) return; if (status && status.classList && status.classList.contains('show')) return; if(e.button!==0) return; const dt=performance.now()-tapT; if(!tapMoved && dt<250){ if(clickSingleTimer) clearTimeout(clickSingleTimer); clickSingleTimer = setTimeout(()=>{ try{ togglePlay(); }catch(_){ } }, 200); } });
+    if (inLeftUiCluster(e)) return;
+    if (e.target && e.target.closest &&
+        (e.target.closest('#toolbar') ||
+         e.target.closest('#fsBar') ||
+         e.target.closest('#plistDock') ||
+         e.target.closest('#infoBtn') ||
+         e.target.closest('#plistBtn'))) return;
+    if (status && status.classList && status.classList.contains('show')) return;
+    if(e.button!==0) return;
+    const dt=performance.now()-tapT;
+    if(!tapMoved && dt<250){
+      if(clickSingleTimer) clearTimeout(clickSingleTimer);
+      clickSingleTimer = setTimeout(()=>{ try{ togglePlay(); }catch(_){ } }, 200);
+    }
+  });
 
   // === Fullscreen (cross‑browser) ===
   function isFullscreen(){ return document.fullscreenElement || document.webkitFullscreenElement || document.msFullscreenElement || document.mozFullScreenElement; }
@@ -1686,6 +1849,44 @@ function relocatePanelsForFS(fs){
       hud.addEventListener(type, guardBubble, false);
     });
     hud.__hudGuardBubble = true;
+  }catch(_){}
+})();
+
+</script>
+<script>
+
+// === Patch: ensure overlays don't block UI after loading; blur status; enable controls ===
+(function(){
+  try{
+    const once = (el, ev, fn)=> el && el.addEventListener(ev, (...a)=>{ try{ fn(...a); }finally{ el.removeEventListener(ev, fn, {once:true}); } }, {once:true});
+    const safe = fn=>{ try{ fn(); }catch(_){} };
+
+    function hideOverlaysAndBlur(){
+      safe(()=> dropmask && dropmask.classList.remove('show'));
+      safe(()=> introBackdrop && introBackdrop.classList.remove('show'));
+      safe(()=> status && status.classList.remove('show'));
+      safe(()=> document.activeElement && document.activeElement.blur && document.activeElement.blur());
+    }
+
+    // On drop: hide masks immediately
+    if (typeof viewer!=='undefined'){
+      viewer.addEventListener('drop', ()=>{ hideOverlaysAndBlur(); }, {capture:true});
+    }
+
+    // After metadata/data/canplay: hide overlays and ensure buttons are active
+    ['loadedmetadata','loadeddata','canplay'].forEach(ev=>{
+      if (typeof video!=='undefined' && video){
+        video.addEventListener(ev, ()=>{
+          hideOverlaysAndBlur();
+          try{
+            if (playBtn) playBtn.disabled = false;
+            if (stepBackBtn) stepBackBtn.disabled = false;
+            if (stepFwdBtn) stepFwdBtn.disabled = false;
+          }catch(_){}
+        }, {once:false});
+      }
+    });
+
   }catch(_){}
 })();
 
