@@ -1385,7 +1385,9 @@ const runWithAdaptiveConcurrency = async (
   const EWMA_ALPHA = 0.25;
 
   // Only make stability decisions if we processed at least this many tiles in a batch.
-  const MIN_TILES_FOR_DECISION = isSmallRun ? 10 : 20;
+  const MIN_TILES_FOR_DECISION = isSmallRun ? 10 : 12;
+  // Also allow decisions when we processed enough bytes (useful when each source file == 1 tile).
+  const MIN_BYTES_FOR_DECISION = isSmallRun ? 8_000_000 : 20_000_000;
 
   let idx = 0;
   let tpEwmaMbps = null;
@@ -1440,13 +1442,13 @@ const runWithAdaptiveConcurrency = async (
     const unstable = (retriesPerTile > 0.10 || msPerTile > 17000);
     const stable = (retriesPerTile < 0.04 && msPerTile < 13000);
 
-    const enoughTiles = tilesDelta >= MIN_TILES_FOR_DECISION;
+    const enoughSignal = (tilesDelta >= MIN_TILES_FOR_DECISION) || (bytesDelta >= MIN_BYTES_FOR_DECISION);
 
     if (cooldownBatches > 0) cooldownBatches -= 1;
     if (reprobeCooldown > 0) reprobeCooldown -= 1;
 
     // Update streaks only when we have enough signal.
-    if (enoughTiles) {
+    if (enoughSignal) {
       if (unstable) {
         unstableStreak += 1;
         stableStreak = 0;
@@ -1519,11 +1521,11 @@ const runWithAdaptiveConcurrency = async (
         reprobeCooldown === 0 &&
         concurrency < lockedMax &&
         (
-          // Prefer stability; if we don't have enoughTiles, avoid changing.
-          (enoughTiles && stableStreak >= 2) ||
-          // If we don't have enoughTiles signal yet (very small / early batches),
+          // Prefer stability; if we don't have enoughSignal, avoid changing.
+          (enoughSignal && stableStreak >= 2) ||
+          // If we don't have enoughSignal yet (very small / early batches),
           // allow one gentle probe on small runs.
-          (!enoughTiles && isSmallRun && idx === 0 && concurrency < lockedMax)
+          (!enoughSignal && isSmallRun && idx === 0 && concurrency < lockedMax)
         )
       ) {
         // Start a probe: remember throughput at current concurrency, then increase by 1.
@@ -1777,15 +1779,16 @@ setProgress(totalTiles, totalTiles);
         : null;
 
       console.groupCollapsed("[Image Align Tool] Import stats");
-      console.log("Files (sources):", fileInfos.length);
-      console.log("Tiles:", { total: totalTiles, created: createdTiles });
-      console.log("Time:", { preparing: fmtMs(prepMs), uploading: fmtMs(uploadMs), total: fmtMs(totalMs) });
+      console.log(`Files (sources): ${fileInfos.length}`);
+      console.log(`Tiles: ${createdTiles}/${totalTiles}`);
+      console.log(`Time: preparing ${fmtMs(prepMs)}, uploading ${fmtMs(uploadMs)}, total ${fmtMs(totalMs)}`);
       console.log("Upload:", {
         totalMB: Math.round(totalMB * 10) / 10,
         avgMBPerTile: Math.round(avgMBPerTile * 100) / 100,
         mbps: mbps != null ? Math.round(mbps * 100) / 100 : null,
         retries: uploadRetryEvents,
       });
+
       const p50Ms = percentile(createImageWallTimesMs, 0.5);
       const p95Ms = percentile(createImageWallTimesMs, 0.95);
       const wallHuman = avgCreateMs != null
@@ -1798,8 +1801,19 @@ setProgress(totalTiles, totalTiles);
         maxSeen: maxConcurrencySeen,
         configuredMax: UPLOAD_CONCURRENCY_MAX,
       });
+
       if (concurrencyDecisions.length) {
-        console.table(concurrencyDecisions.slice(-12));
+        const rows = concurrencyDecisions.slice(-12).map((d) => ({
+          idx: d.idx,
+          conc: d.conc,
+          lockedMax: d.lockedMax,
+          mbps: d.mbps,
+          ips: d.ips,
+          retriesPerTile: d.retriesPerTile,
+          msPerTile: d.msPerTile,
+          action: d.action,
+        }));
+        console.table(rows);
       }
       console.groupEnd();
     } catch (e) {
