@@ -1,1899 +1,1895 @@
-// app.js
-// Image Align Tool: Sorting + Stitch/Slice
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>DPG Video Viewer</title>
+  <style>
+    :root{ --bg:#000; --bg-soft:#0c0c0c; --panel:#111; --muted:#9aa3ad; --text:#e8e8e8; --line:#222; --accent:#4aa3ff; }
+    *{box-sizing:border-box}
+    html,body{height:100%}
+    html{background:var(--bg)}
+    body{margin:0; background:var(--bg); color:var(--text); font:14px/1.4 system-ui,-apple-system,Segoe UI,Roboto,Ubuntu,"Helvetica Neue",Arial; overflow:hidden}
 
-const { board } = window.miro;
+    /* Minimal dark UI */
+    #app{position:fixed; inset:0; display:flex; flex-direction:column}
+    #toolbar{position:absolute;left:-9999px;top:-9999px;width:0;height:0;overflow:hidden;border:0;padding:0;margin:0;background:transparent}
+    .group{display:flex; align-items:center; gap:.5rem}
+    .btn{display:inline-flex; align-items:center; gap:.45rem; background:#151515cc; color:var(--text); border:1px solid var(--line); padding:.42rem .62rem; border-radius:8px; cursor:pointer; user-select:none}
+    .btn:hover{background:#1b1b1bcc}
+    .btn:active{transform:translateY(1px)}
+    .btn .i{width:14px;height:14px;display:inline-block}
+    .btn svg{width:14px;height:14px;display:block}
+    input[type="file"]{display:none}
+    select{background:#151515; color:var(--text); border:1px solid var(--line); border-radius:8px; padding:.35rem .5rem; max-width:40vw}
 
-// ---- color / slice settings ----
-const SAT_CODE_MAX = 99;
-const SAT_BOOST = 4.0;
-const SAT_GROUP_THRESHOLD = 35;      // <= серые, > цветные
-const SLICE_TILE_SIZE = 4096;
-const SLICE_THRESHOLD_WIDTH = 8192;
-const SLICE_THRESHOLD_HEIGHT = 4096;
-let   MAX_SLICE_DIM = 16384;         // уточняем через WebGL
-const MAX_URL_BYTES = 29000000;      // лимит размера dataURL (~29 МБ, есть запас до 30 МБ)
-const TARGET_URL_BYTES = 4500000;   // целевой размер dataURL (~4.5 МБ на тайл/изображение)
-const CREATE_IMAGE_MAX_RETRIES = 5;
-const CREATE_IMAGE_BASE_DELAY_MS = 500;
-const UPLOAD_CONCURRENCY_SMALL = 3;
-const UPLOAD_CONCURRENCY_LARGE = 4;
+    /* range track + thumb — same everywhere (normal + fullscreen) */
+    input[type="range"], #fsBar input[type="range"]{ -webkit-appearance:none; appearance:none; height:4px; background:#232323; border-radius:999px; outline:none; padding:0 }
+    /* WebKit */
+    input[type="range"]::-webkit-slider-runnable-track, #fsBar input[type="range"]::-webkit-slider-runnable-track{ height:4px; background:#232323; border-radius:999px }
+    input[type="range"]::-webkit-slider-thumb, #fsBar input[type="range"]::-webkit-slider-thumb{ -webkit-appearance:none; width:14px; height:14px; border-radius:50%; background:var(--accent); border:0; margin-top:-5px }
+    /* Firefox */
+    input[type="range"]::-moz-range-track, #fsBar input[type="range"]::-moz-range-track{ height:4px; background:#232323; border-radius:999px }
+    input[type="range"]::-moz-range-progress, #fsBar input[type="range"]::-moz-range-progress{ height:4px; background:#232323; border-radius:999px }
+    input[type="range"]::-moz-range-thumb, #fsBar input[type="range"]::-moz-range-thumb{ width:14px; height:14px; border-radius:50%; background:var(--accent); border:0 }
+    /* Old Edge/IE */
+    
+    
+    
 
-const UPLOAD_CONCURRENCY_MIN = 2;
-const UPLOAD_CONCURRENCY_MAX = 5;
-const UPLOAD_CONCURRENCY_INITIAL_LARGE = 4;
-const META_APP_ID = "image-align-tool";
+    #time{flex:1; min-width:160px}
+    #viewer{position:relative; flex:1; min-height:0; background:var(--bg)}
+    canvas{display:block; position:absolute; inset:0; z-index:0; background:var(--bg)}
 
-// ---------- авто-детект лимита по стороне через WebGL ----------
+    /* start/empty state */
+    #introBackdrop{position:absolute; inset:0; display:none; background:radial-gradient(ellipse at center, var(--bg-soft) 0%, #0a0a0a 55%, var(--bg) 100%); z-index:1}
+    #introBackdrop.show{display:block}
+    #status{position:absolute; left:50%; top:50%; transform:translate(-50%,-50%); background:#151515e6; border:1px solid var(--line); padding:1rem 1.25rem; border-radius:10px; display:none; text-align:center; max-width:min(90vw,800px); z-index:2; color:#fff; cursor:pointer}
+    #status.show{display:block}
+    #status progress{width:260px}
 
-function detectMaxSliceDim() {
-  try {
-    const canvas = document.createElement("canvas");
-    const gl =
-      canvas.getContext("webgl") ||
-      canvas.getContext("experimental-webgl");
+    #dropmask{position:absolute; inset:0; display:none; place-items:center; background:rgba(74,163,255,.08); border:2px dashed var(--accent); border-radius:12px; color:#bfe1ff; font-weight:600; z-index:2}
+    #dropmask.show{display:grid}
 
-    if (!gl) {
-      console.warn("Slice: WebGL not available, using fallback 16384.");
-      return;
+    /* compact buttons */
+    #fsBtn{width:36px; justify-content:center}
+    #closeAll{width:auto}
+    #infoBtn{width:auto}
+
+    /* fullscreen timeline overlay */
+    #fsBar .btn span:not(.i){display:none}
+    #fsBar{position:absolute; left:50%; bottom:10px; transform:translateX(-50%); display:none; align-items:center; gap:.5rem; background:#101010cc; border:1px solid #2a2a2a; border-radius:10px; padding:.45rem .6rem; z-index:3}
+    #fsBar.show{display:flex}
+    #fsBar input[type="range"]{width:min(62vw,900px)}
+    #fsTime{min-width:90px; opacity:.9}
+
+    /* HUD (fps/frame) */
+
+    /* playlist button dock under the HUD */
+    #plistDock{position:absolute; left:8px; top:44px; z-index:3}
+    #plistDock .btn{width:auto}
+
+    #hud{position:absolute; top:8px; left:8px; z-index:3; background:#101010cc; border:1px solid #2a2a2a; padding:.25rem .5rem; border-radius:8px; font-size:.9rem; color:#d8d8d8;
+  white-space: nowrap;
+
+  display:inline-flex;
+  align-items:center;
+}
+    #hud .sep{opacity:.6; margin:0 .25rem}
+
+    /* Info panel */
+    #infoPanel{position:fixed; top:52px;  width:320px; max-width:90vw; background:#101010cc; color:#ddd; border:1px solid #2a2a2a; border-radius:12px; box-shadow:0 10px 30px rgba(0,0,0,.35); display:none; z-index:var(--z-info, 6)}
+    #infoPanel.show{display:block}
+    #infoPanel header{padding:.6rem .8rem; border-bottom:1px solid #222; font-weight:600}
+    #infoPanel .body{padding:.6rem .8rem; font-size:.95rem}
+    #infoPanel .body dl{display:grid; grid-template-columns:auto 1fr; gap:.35rem .75rem; margin:0}
+    #infoPanel .body dt{color:#9aa3ad}
+    #infoPanel .body dd{margin:0}
+
+    /* playlist custom dropdown */
+
+    /* make playlist footer button span full width */
+    #plistFooter .btn{width:100%; max-width:none; margin:0; justify-content:center; box-sizing:border-box}
+
+    #plistFooter{display:flex; justify-content:center; padding:.5rem .6rem; border-top:1px solid var(--line);}
+
+    /* playlist footer pinned bottom */
+    
+
+    #playlist{display:none}
+    #plistPanel{position:fixed; display:none; z-index:var(--z-plist, 5); background:#101010cc; border:1px solid #2a2a2a; border-radius:10px; min-width:260px; max-width:80vw; max-height:50vh; overflow:auto; box-shadow:0 10px 30px rgba(0,0,0,.35)}
+    #plistPanel.show{display:block}
+    #plistPanel .plItem{display:flex; align-items:center; gap:.5rem; padding:.45rem .6rem; border-bottom:1px solid #1b1b1b; cursor:pointer; transition:background-color .12s ease} 
+    #plistPanel .plItem:hover{background:#1b1b1b}
+    #plistPanel .plItem:last-child{border-bottom:0}
+    #plistPanel .name{flex:1; white-space:nowrap; overflow:hidden; text-overflow:ellipsis}
+    #plistPanel .idx{opacity:.6; font-variant-numeric:tabular-nums; width:2ch}
+    #plistPanel .x{background:transparent; border:1px solid #333; color:#aaa; width:22px; height:22px; border-radius:6px; cursor:pointer; display:inline-flex; align-items:center; justify-content:center}
+    #plistPanel .x:hover{background:#1a1a1a; color:#fff; border-color:#444}
+    #plistPanel .active .name{color:#fff; font-weight:600}
+
+    /* hide Prev/Next buttons per request */
+    
+  
+    #plistDock #infoBtn{ display:block; margin-top:6px }
+
+/* ===== Auto-hide UI (menus) ===== */
+#fsBar, #plistDock, #plistPanel, #infoPanel { transition: opacity .18s ease; }
+#viewer.ui-autoHide #fsBar,
+#viewer.ui-autoHide #plistDock,
+#viewer.ui-autoHide #plistPanel,
+#viewer.ui-autoHide #infoPanel,
+#viewer.ui-autoHide #hud { opacity:0; pointer-events:none; }
+/* Optionally hide cursor when menus are auto-hidden */
+#viewer.ui-autoHide { cursor: none; }
+#viewer.ui-autoHide.cursorReveal { cursor: auto; }
+/* Invisible hover zones to reveal menus while playing */
+.hotZone{ position:absolute; z-index:4; pointer-events:none; }
+.hotZone.active{ pointer-events:auto; }
+#hzBottom{ left:0; right:0; bottom:0; height:120px; }
+#hzCorner{ left:0; top:0; width:220px; height:160px; }
+
+/* HUD frame-jump input */
+#hud input#frameJumpInput{
+  font: inherit;
+  color: var(--text);
+  background: var(--bg-soft, #1b1b1b);
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  padding: 0 .25rem;
+  outline: none;
+  display:inline-block;
+  vertical-align:middle;
+  min-width:8ch;
+  width:auto;
+  line-height:1.2;
+}
+#hud input#frameJumpInput:focus{
+  border-color: var(--accent);
+  background: var(--bg, #0f0f10);
+}
+/* Hide steppers (only for frameJumpInput) — жёстко, для всех движков */
+#hud input#frameJumpInput::-webkit-outer-spin-button,
+#hud input#frameJumpInput::-webkit-inner-spin-button{
+  -webkit-appearance:none !important;
+  margin:0 !important;
+}
+#hud input#frameJumpInput[type="number"]{
+  -moz-appearance:textfield !important;
+}
+#hud input#frameJumpInput{
+  -webkit-appearance:none !important;
+  appearance:none !important;
+}
+
+/* --- Fix: Firefox blue focus outline persisting on central intro button --- */
+#status:focus { outline: none !important; }
+#status:focus-visible { outline: none !important; box-shadow: none !important; }
+#status::-moz-focus-inner { border: 0; }
+
+#hud #hudFrame{
+  display:inline-flex;
+  align-items:center;
+  flex-wrap:nowrap;
+  gap:.25rem;
+}
+#hud #hudFrame > *{
+  flex:0 0 auto;
+}
+
+/* === Force‑hide number steppers for frameJumpInput (all major engines) === */
+/* Chromium / Edge / Safari (WebKit/Blink) */
+#hud input#frameJumpInput::-webkit-outer-spin-button,
+#hud input#frameJumpInput::-webkit-inner-spin-button { -webkit-appearance: none !important; margin: 0 !important; }
+/* Firefox */
+#hud input#frameJumpInput[type="number"] { -moz-appearance: textfield !important; }
+/* Standard + iOS Safari fallback */
+#hud input#frameJumpInput { -webkit-appearance: none !important; appearance: none !important; }
+</style>
+</head>
+<body>
+<div id="app">
+  <div id="toolbar" role="toolbar" aria-label="Controls" hidden aria-hidden="true">
+    <div class="group">
+      <label class="btn" title="Open videos (MP4/WebM)" style="display:none">
+        <span class="i" aria-hidden="true">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3v12"/><path d="M8 11l4 4l4-4"/><path d="M4 21h16"/></svg>
+        </span>
+        <span>Open</span>
+        <input id="file" type="file" accept="video/*,video/mp4,video/webm,video/x-matroska,video/quicktime" multiple />
+      </label></div>
+
+    <div class="group" style="flex:1; display:none">
+      <div id="tc" style="min-width:120px;opacity:.9">00:00 / 00:00</div>
+      <input id="time" type="range" min="0" max="0" value="0" step="0.001" aria-label="Timeline" disabled />
+    </div>
+
+    <div class="group">
+      
+      <input id="zoom" type="range" min="20" max="100" value="80" step="1" aria-label="Zoom (FOV)" style="display:none" /></div>
+
+    <div class="group">
+      
+      <select id="playlist" title="Playlist" disabled></select></div>
+
+    <div class="group"></div>
+  </div>
+
+  <div id="viewer">
+    <div id="hzBottom" class="hotZone" aria-hidden="true"></div>
+    <div id="hzCorner" class="hotZone" aria-hidden="true"></div>
+
+    <div id="introBackdrop" class="show"></div>
+    <div id="dropmask">Drag & Drop MP4/WebM files here</div>
+    <div id="status" class="show" role="button" tabindex="0" aria-label="Choose a video">
+      <div id="statusText" style="margin-bottom:.5rem">Drag & Drop a video here or <b>click here</b>.</div>
+      <progress max="1" value="0" id="progress" hidden></progress>
+    </div>
+
+    <div id="hud"><span id="hudFps">FPS: —</span><span class="sep">|</span><span id="hudFrame">Frame: —</span></div>
+
+    <div id="plistDock"><button id="plistBtn" class="btn" title="Playlist — click to switch or remove">
+        <span class="i" aria-hidden="true"><svg viewBox="0 0 24 24" stroke="currentColor" fill="none" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M4 6h16"/><path d="M4 12h16"/><path d="M4 18h10"/></svg></span>
+        <span id="plistBtnLabel"></span>
+      </button>
+      <button id="infoBtn" class="btn" title="Hotkeys / Info">
+        <span class="i" aria-hidden="true" style="width:14px !important;height:14px !important;"><svg viewBox="0 0 24 24" width="14" height="14" stroke="currentColor" fill="none" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10.5"/><circle cx="12" cy="8.4" r="2.1" fill="currentColor" stroke="none"/><rect x="10" y="10.8" width="4.0" height="8.6" rx="2.0" fill="currentColor" stroke="none"/></svg></span></button>
+    </div>
+
+    <!-- fullscreen timeline overlay -->
+    <div id="fsBar" class="show">
+      <button id="play" class="btn" title="Play\/Pause — Space or Left click" disabled>
+        <span class="i" aria-hidden="true" id="playIcon">
+          <svg viewBox="0 0 24 24" fill="currentColor"><path d="M8 5l10 7l-10 7z"/></svg>
+        </span>
+        <span id="playLabel">Play</span>
+      </button>
+      <button id="stepBack" class="btn" title="Previous frame — ← or A" disabled>
+        <span class="i" aria-hidden="true"><svg viewBox="0 0 24 24" stroke="currentColor" fill="none" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M5 6v12"/><path d="M19 5l-10 7l10 7"/></svg></span>
+      </button>
+      <button id="stepFwd" class="btn" title="Next frame — → or D" disabled>
+        <span class="i" aria-hidden="true"><svg viewBox="0 0 24 24" stroke="currentColor" fill="none" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M19 6v12"/><path d="M5 5l10 7l-10 7"/></svg></span>
+      </button>
+      <div id="fsTime">00:00 / 00:00</div>
+      <input id="fsTimeRange" type="range" min="0" max="0" value="0" step="0.001" aria-label="Fullscreen timeline" />
+      <button id="fsBtn" class="btn" title="Fullscreen — Double‑click viewer" aria-label="Fullscreen">
+        <span class="i" aria-hidden="true"><svg viewBox="0 0 24 24" stroke="currentColor" fill="none" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M4 9V4h5"/><path d="M20 9V4h-5"/><path d="M4 15v5h5"/><path d="M20 15v5h-5"/></svg></span>
+      </button>
+      <button id="resetView" class="btn" title="Reset view — R">
+        <span class="i" aria-hidden="true"><svg viewBox="0 0 24 24" stroke="currentColor" fill="none" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M21 12a9 9 0 1 1-2.64-6.36"/><path d="M21 3v4h-4"/></svg></span>
+        <span>Reset</span>
+      </button>
+    </div>
+  </div>
+
+  <!-- Info panel -->
+  <aside id="infoPanel" aria-label="Hotkeys">
+    <header>Hotkeys</header>
+    <div class="body">
+      <dl>
+        <dt>Play / Pause</dt><dd>Space or Left click</dd>
+        <dt>Move</dt><dd>Mouse drag</dd>
+        <dt>Zoom</dt><dd>Mouse wheel</dd>
+        <dt>Step −1 frame</dt><dd>← or A</dd>
+        <dt>Step +1 frame</dt><dd>→ or D</dd>
+        <dt>Prev video</dt><dd>↑ or W</dd>
+        <dt>Next video</dt><dd>↓ or S</dd>
+        <dt>Reset view</dt><dd>R</dd>
+        <dt>Open playlist</dt><dd>E</dd>
+        <dt>Close all (playlist)</dt><dd>Q</dd>
+        <dt>Close all (playlist icon)</dt><dd>Right click</dd>
+        <dt>Open info</dt><dd>I</dd>
+        <dt>Open file</dt><dd>O</dd>
+        <dt>Select frame</dt><dd>Left click on frames</dd>
+      </dl>
+    </div>
+  </aside>
+</div>
+  <div id="plistPanel" role="dialog" aria-label="Playlist">
+    <div id="plistFooter" style="display:flex; justify-content:center; padding:0; border-top:1px solid var(--line);">
+      <button id="closeAll" class="btn" title="Close all videos">
+        <span class="i" aria-hidden="true"><svg viewBox="0 0 24 24" stroke="currentColor" fill="none" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M18 6L6 18"/><path d="M6 6l12 12"/></svg></span>
+        <span>Close all</span>
+      </button>
+    </div>
+</div>
+  <span id="meas" style="position:absolute;visibility:hidden;white-space:nowrap"></span>
+
+<script type="module">
+  import * as THREE from 'https://unpkg.com/three@0.160.0/build/three.module.js';
+  import { OrbitControls } from 'https://unpkg.com/three@0.160.0/examples/jsm/controls/OrbitControls.js?module';
+
+  // === UI ===
+  
+function esc(s){ try{ return String(s).replace(/[&<>"']/g, function(m){ return ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;','\'':'&#39;'}[m]); }); }catch(_){ return ''; } }
+const I=id=>document.getElementById(id);
+  const [fileInput,playBtn,stepBackBtn,stepFwdBtn,timeSlider,tc,zoomSlider,resetViewBtn,status,statusText,progress,dropmask,fsBtn,closeAllBtn,playlistSel,introBackdrop,fsBar,fsTime,fsTimeRange,playIcon,playLabel,infoBtn,infoPanel,plistBtn,plistBtnLabel,plistPanel,hudFps,hudFrame,viewer,toolbar,meas] = ['file','play','stepBack','stepFwd','time','tc','zoom','resetView','status','statusText','progress','dropmask','fsBtn','closeAll','playlist','introBackdrop','fsBar','fsTime','fsTimeRange','playIcon','playLabel','infoBtn','infoPanel','plistBtn','plistBtnLabel','plistPanel','hudFps','hudFrame','viewer','toolbar','meas'].map(I);
+  
+
+// ===== SECTION: UI ELEMENT BINDINGS =====
+// ====== CONFIG / STATE / BUS (non-breaking scaffolding) ======
+const CONFIG = Object.freeze({
+  zoom: { min: parseFloat(zoomSlider.min)||20, max: parseFloat(zoomSlider.max)||100, uiInitial: parseFloat(zoomSlider.value)||80 },
+});
+
+const state = {
+  mode: 'flat',      // 'flat' | 'vr' (future: 'image' | 'sequence' | 'audio')
+  fps: null,
+  framesTotal: null,
+  isScrubbing: false,
+  fov: 75,
+  meta: { type: null, name: '', duration: null },
+};
+
+const Bus = (()=>{
+  const m = new Map();
+  return {
+    on(ev, fn){ if(!m.has(ev)) m.set(ev, new Set()); m.get(ev).add(fn); return ()=>m.get(ev)?.delete(fn); },
+    emit(ev, payload){ const s=m.get(ev); if(s) for(const fn of s) try{ fn(payload); }catch(e){ console.error(e); } },
+    off(ev, fn){ m.get(ev)?.delete(fn); }
+  };
+})();
+
+// ---- Bus listeners (non-breaking mirrors) ----
+try{
+  Bus.on && Bus.on('fps:set', (val)=>{
+    try{
+      state.fps = (typeof val==='number' && isFinite(val)) ? val : null;
+      if(state.fps && isFinite((video&&video.duration)||NaN)){
+        state.framesTotal = Math.round((video.duration||0)*state.fps);
+      } else {
+        state.framesTotal = null;
+      }
+    }catch(_){}
+  });
+  Bus.on && Bus.on('seek', (t)=>{
+    try{
+      // mirror only; core seek logic unchanged
+      // could be used by external panels later
+    }catch(_){}
+  });
+}catch(_){/* no-op if Bus absent */}
+// ---- /Bus listeners ----
+// ===== SECTION: STATUS DISPLAY =====
+function reportError(err, where){
+  try{
+    const msg = (err && err.message) ? err.message : String(err);
+    showError(where ? (where+': '+msg) : msg);
+    if (console && console.error) console.error('[viewer]', where||'error', err);
+  }catch(_){/* noop */}
+}
+
+function setStatus(kind, text){
+  try{
+    if(text!=null){
+      if(kind==='error'){ status.classList.add('show'); statusText.textContent = String(text); }
+      else if(kind==='info'){ status.classList.add('show'); statusText.textContent = String(text); }
+      else { status.classList.remove('show'); }
     }
+  }catch(_){/* non-critical */}
+}
+function showInfo(text){
+  try{ setStatus('info', text); status.classList.add('show'); statusText.textContent = String(text); }catch(_){}
+}
+function showError(text){
+  try{ setStatus('error', text); status.classList.add('show'); statusText.textContent = String(text); }catch(_){}
+}
+function clearStatus(){
+  try{ setStatus('', ''); status.classList.remove('show'); }catch(_){}
+}
 
-    const maxTexSize = gl.getParameter(gl.MAX_TEXTURE_SIZE);
-    console.log("Slice: MAX_TEXTURE_SIZE =", maxTexSize);
+// ====== /CONFIG / STATE / BUS ======
+const ZMIN = parseFloat(zoomSlider.min)||20;
+  const ZMAX = parseFloat(zoomSlider.max)||100;
+  const ZSUM = ZMIN + ZMAX;
 
-    MAX_SLICE_DIM = Math.min(maxTexSize || 16384, 32767);
-  } catch (e) {
-    console.warn("Slice: failed to detect MAX_TEXTURE_SIZE, using fallback.", e);
+  const on=(t,evs,fn,opt)=>evs.split(' ').forEach(e=>t.addEventListener(e,fn,opt));
+
+  // === THREE ===
+  const renderer = new THREE.WebGLRenderer({ antialias:true, alpha:false, powerPreference:'high-performance' });
+  renderer.outputColorSpace = THREE.SRGBColorSpace;
+  const defaultDPR = Math.min(window.devicePixelRatio, 2); let currentDPR = defaultDPR; renderer.setPixelRatio(defaultDPR); const applyDPR=(d)=>{ if(d!==currentDPR){ currentDPR=d; renderer.setPixelRatio(d); onResize();
+  try{ __relocatePlistForFS(!!isFullscreen()); }catch(_){ } } };
+  renderer.setSize(viewer.clientWidth, viewer.clientHeight, true);
+  renderer.setClearColor(0x000000, 1);
+  viewer.appendChild(renderer.domElement);
+
+  const scene = new THREE.Scene();
+  const camera = new THREE.PerspectiveCamera(80, viewer.clientWidth/viewer.clientHeight, 0.1, 1100);
+  camera.position.set(0,0,0.01);
+
+  try{ const fInit = (ZSUM - parseFloat((zoomSlider&&zoomSlider.value)||80)); camera.fov=fInit; camera.updateProjectionMatrix(); fitPlane(); }catch(e){}
+const controls = new OrbitControls(camera, renderer.domElement);
+  controls.enableDamping = true; controls.dampingFactor = 0.07;
+  controls.enablePan = false; controls.rotateSpeed = -0.35; // inverted axes
+  controls.enableZoom = false; // wheel -> FOV zoom
+  let interacting=false; controls.addEventListener('start',()=>{interacting=true}); controls.addEventListener('end',()=>{interacting=false});
+  const isFirefox = /firefox/i.test(navigator.userAgent);
+  // projection + shader materials must be defined BEFORE first use
+  let uvMesh = null;
+  // runtime mode + flat panning
+  let renderMode = 'vr';
+  let panX = 0, panY = 0;
+
+  // Sphere for equirectangular; inside-out w/o mirroring
+
+  const material = new THREE.MeshBasicMaterial({ color: 0xffffff });// keep sphere hidden; VR uses cube only// UV sphere (high tessellation) to compare with cube projection
+  const uvGeo = new THREE.SphereGeometry(500,128,128);
+  uvGeo.scale(-1,1,1);
+  uvMesh = new THREE.Mesh(uvGeo, material);
+  uvMesh.visible = false;
+  uvMesh.rotation.y = -Math.PI/2; // align initial view to image center (−90°)
+  scene.add(uvMesh);
+
+  // (Cube projection removed) — using UV sphere for VR
+
+  // ==== Core media & playback state (restored) ====
+  const video = document.createElement('video');
+  video.crossOrigin = 'anonymous';
+  video.preload = 'auto';
+  video.playsInline = true;
+  video.muted = true;            // allow autoplay when requested
+  video.loop = true;             // auto-repeat per earlier request
+  video.controls = false;
+
+  // Freeze camera while playing to avoid micro-drift/"waves"; restore damping on pause
+  video.addEventListener('play', ()=>{ controls.enableDamping = false; });
+  video.addEventListener('pause', ()=>{ controls.enableDamping = true; });
+
+  let playlist = [];
+  let currentIndex = -1;
+  let revokers = [];
+  let currentFile = null;
+
+  let haveMetadata = false;
+  let pendingAutoplay = false;
+  let allowPlay = false;
+  let isScrubbing = false;
+
+  let sourceFPS = null, displayFPS = null, estimatedFPS = null;
+
+  let videoTex = null;
+
+  // Flat plane for non-2:1 videos
+  const planeMat = new THREE.MeshBasicMaterial({ color: 0xffffff, map: null, side: THREE.DoubleSide });
+  const plane = new THREE.Mesh(new THREE.PlaneGeometry(1,1), planeMat);
+  plane.visible = false;
+  scene.add(plane);
+
+  function attachVideoTexture(){
+    if(videoTex) return;
+    videoTex = new THREE.VideoTexture(video);
+    videoTex.colorSpace = THREE.SRGBColorSpace;
+    const w = video.videoWidth||0, h = video.videoHeight||0;
+    const pot = (w>0 && h>0 && (w & (w-1))===0 && (h & (h-1))===0);
+    const useMips = pot && w<=4096 && h<=4096; // mips only for POT textures
+    videoTex.generateMipmaps = useMips;
+    videoTex.minFilter = useMips ? THREE.LinearMipmapLinearFilter : THREE.LinearFilter;
+    videoTex.magFilter = THREE.LinearFilter;
+    // NPOT textures cannot use REPEAT; enforce CLAMP to avoid incomplete texture -> black
+    videoTex.wrapS = THREE.ClampToEdgeWrapping;
+    videoTex.wrapT = THREE.ClampToEdgeWrapping;
+    videoTex.anisotropy = Math.min(16, renderer.capabilities.getMaxAnisotropy());
+    material.map = videoTex; material.needsUpdate = true;
+    planeMat.map = videoTex; planeMat.needsUpdate = true;
+    
+    if(video.readyState>=2){ videoTex.needsUpdate = true; }
   }
+  function refreshTex(){ if(videoTex){ videoTex.needsUpdate = true; } }
+
+  function applyLetterbox(){ /* no-op for compatibility */ }
+
+  function applyVR(){
+    renderMode='vr'; controls.enabled=true; plane.visible=false;if(uvMesh) uvMesh.visible=true;
+  }
+  function applyFLAT(){
+    renderMode='flat'; controls.enabled=false;if(uvMesh) uvMesh.visible=false; plane.visible=true; fitPlane();
+  }
+  function decideAndApplyMode(){
+    const w = video.videoWidth || 0, h = video.videoHeight || 0;
+    if (h>0 && Math.abs(w/h - 2) < 0.05) applyVR(); else applyFLAT();
+  }
+
+  function fitPlane(){
+    const d=1;
+    const vh = 2*d*Math.tan(THREE.MathUtils.degToRad(camera.fov/2));
+    const vw = vh*camera.aspect;
+    const W = video.videoWidth || 16, H = video.videoHeight || 9;
+    const r = W/H, rView = vw/(vh||1);
+    let pw, ph;
+    if (r >= rView) { pw = vw; ph = vw / r; } else { ph = vh; pw = vh * r; }
+    plane.position.set(panX, panY, -d);
+    const z = 75 / (camera.fov || 75); plane.scale.set(pw * z, ph * z, 1); }
+
+  function fmtTime(t){ if(!isFinite(t)) return '00:00'; t=Math.max(0, Math.floor(t)); const s=t%60; const m=Math.floor(t/60)%60; const h=Math.floor(t/3600); return h>0? (h+':'+String(m).padStart(2,'0')+':'+String(s).padStart(2,'0')) : (String(m).padStart(2,'0')+':'+String(s).padStart(2,'0')); }
+  function updateTimeUI(){
+    const cur=video.currentTime||0, dur=video.duration||0;
+    tc.textContent = `${fmtTime(cur)} / ${fmtTime(dur)}`;
+    fsTime.textContent = `${fmtTime(cur)} / ${fmtTime(dur)}`;
+    if(Number.isFinite(dur) && dur>0 && !isScrubbing){
+      const max=dur.toFixed(3); const val=(video.currentTime||0).toFixed(3);
+      timeSlider.max=max; fsTimeRange.max=max; timeSlider.value=val; fsTimeRange.value=val;
+      timeSlider.disabled=false; fsTimeRange.disabled=false;
+    }
+  }
+  function formatFPS(val){
+  if(!(typeof val==='number') || !isFinite(val)) return '—';
+  const r = Math.round(val*1000)/1000;
+  if (Math.abs(r - Math.round(r)) < 1e-3) return String(Math.round(r));
+  return String(r).replace(/\.0+$/, '').replace(/(\.\d*[1-9])0+$/, '$1');
 }
 
-// ---------- helpers: titles & numbers ----------
+// ===== Media Adapters (skeleton, unused yet) =====
+/**
+ * Basic interface (documentation):
+ *  kind: 'video'|'image'|'sequence'|'audio'
+ *  load(fileOrUrl): Promise<Meta>
+ *  play(), pause(), seek(t), currentTime(), duration(), dispose()
+ */
+function createVideoAdapter(videoEl){
+  const v = videoEl;
+  return {
+    kind: 'video',
+    async load(){ return { duration: v.duration||null }; },
+    play(){ try{ v.play(); }catch(_){/*noop*/} },
+    pause(){ try{ v.pause(); }catch(_){/*noop*/} },
+    seek(t){ try{ v.currentTime = Math.max(0, Math.min(v.duration||0, +t||0)); }catch(_){/*noop*/} },
+    currentTime(){ return v.currentTime||0; },
+    duration(){ return v.duration||0; },
+    dispose(){ /* nothing yet */ }
+  };
+}
+// ===== /Media Adapters =====
 
-function getTitle(item) {
-  return (item.title || "").toString();
+// ===== SECTION: HUD UPDATE LOOP =====
+
+function updateHUD(){
+  /* state mirrors */ try{ state.fps = displayFPS || null; state.framesTotal = (displayFPS && isFinite(video.duration||NaN))? Math.round((video.duration||0)*displayFPS): null; state.fov = (camera&&camera.fov)||state.fov; }catch(_){/*noop*/}
+
+    const fps = displayFPS;
+    hudFps.textContent = 'FPS: ' + (fps? formatFPS(fps) : '—');
+    hudFps.style.color = (fps && Math.round(fps)!==30) ? '#ff4a4a' : '';
+    const f = fps ? Math.max(0, Math.round((video.currentTime||0)*fps)) : '—';
+    const total = (displayFPS && isFinite(video.duration||NaN)) ? Math.round((video.duration||0)*displayFPS) : null;
+if (document.getElementById('frameJumpInput')) {  const wrap = document.getElementById('frameTotalWrap');  if (wrap) { wrap.textContent = total ? (' / ' + String(total)) : ''; }} else {  hudFrame.textContent = 'Frame: ' + (total? (String(f)+' / '+String(total)) : String(f));}}
+  let lastUI=0; const UI_INTERVAL=80;
+  function updateUI(force=false){ const now=performance.now(); if(force || now-lastUI>UI_INTERVAL){ updateTimeUI(); updateHUD(); lastUI=now; } }
+
+  function rebuildPlaylistUI(){
+    playlistSel.innerHTML = playlist.map((it,i)=>`<option value="${i}">${i+1}. ${it.name}</option>`).join('');
+    playlistSel.disabled = playlist.length===0;
+    plistBtnLabel.textContent = playlist.length ? String(playlist.length) : '';
+    rebuildPlaylistPanel();
+  
+    if(playlist.length===0){ try{ displayFPS=null; }catch(_){ } try{ updateHUD(true); }catch(_){ } }
+  }
+
+  async function addFiles(fileList){
+    const wasPlaying = !video.paused && haveMetadata;
+    const arr = Array.from(fileList||[]);
+    for(const f of arr){
+      if(!f) continue; const _t=(f.type||'').toLowerCase(); const _n=(f.name||'').toLowerCase(); const _looksVideo = _t.startsWith('video/') || /\.(mp4|webm|mkv|mov)$/i.test(_n); if(!_looksVideo) continue;
+      let _pf; try{ _pf = await prefetchToBlobUrl(f); }catch(_){ _pf = { blobUrl: URL.createObjectURL(f), fromCache:false }; }
+      const url = _pf.blobUrl;
+      revokers.push(()=>{ try{ URL.revokeObjectURL(url); }catch(_){}});
+      playlist.push({ url, name:f.name, file:f });
+    }
+    rebuildPlaylistUI();
+    if(playlist.length){ loadIndex(playlist.length-1, {autoplay:wasPlaying}); }
+  }
+
+  // Render loop
+  function loop(){
+    if(!video.paused && video.readyState>=2 && videoTex){ videoTex.needsUpdate = true; }
+    if(controls.enableDamping || interacting) controls.update();
+    renderer.render(scene, camera);
+    updateUI();
+  }
+  
+
+// Render once helper to force a frame when stepping on pause
+function __renderOnce(){
+  try{
+    if(videoTex) videoTex.needsUpdate = true;
+    if(typeof renderer!=='undefined' && renderer && typeof scene!=='undefined' && scene && typeof camera!=='undefined' && camera){
+      renderer.render(scene, camera);
+    }
+  }catch(_){}
+}
+renderer.setAnimationLoop(loop);
+
+  function loadIndex(i, opts={autoplay:false}){
+    if(i<0 || i>=playlist.length) return;
+    const wasPlaying = opts.autoplay;
+    currentIndex = i; playlistSel.value = String(i);
+    try{ updatePlaylistActive(); }catch(_){ }
+    
+    try{ if(plistPanel && plistPanel.classList.contains('show')) plistBtn.blur(); }catch(_){ }
+currentFile = playlist[i].file || null;
+    loadURL(playlist[i].url, playlist[i].name, {autoplay: wasPlaying});
+  }
+  const nav=(d)=>{ if(!playlist.length) return; const p=!video.paused&&haveMetadata; loadIndex((currentIndex+d+playlist.length)%playlist.length,{autoplay:p}); };
+  
+  
+  playlistSel.addEventListener('change', ()=>{ const wasPlaying = !video.paused && haveMetadata; const i = parseInt(playlistSel.value,10); loadIndex(i, {autoplay:wasPlaying}); });
+
+  // === Custom playlist panel ===
+  
+// Keep active row highlighted in the opened playlist panel
+function updatePlaylistActive(){
+  try{
+    if(!plistPanel) return;
+    const prev = plistPanel.querySelector('.plItem.active');
+    if(prev) prev.classList.remove('active');
+    const cur = plistPanel.querySelector(`.plItem[data-idx="${currentIndex}"]`);
+    if(cur){ cur.classList.add('active'); try{ cur.scrollIntoView({block:'nearest'}); }catch(_){ } }
+  }catch(_){}
 }
 
-function extractTrailingNumber(str) {
-  const match = str.match(/(\d+)(?!.*\d)/);
-  if (!match) return null;
-  const num = Number.parseInt(match[1], 10);
-  return Number.isNaN(num) ? null : num;
-}
+function rebuildPlaylistPanel(){
+    if(!plistPanel) return;
+    if(!playlist.length){ plistPanel.innerHTML = '<div style="padding:.6rem .8rem; color:#9aa3ad">Empty</div>'; return; }
+    const rows = playlist.map((item,i)=>{
+      const active = (i===currentIndex) ? ' active' : '';
+      return `<div class="plItem${active}" data-idx="${i}">
+        <span class="idx">${i+1}.</span>
+        <span class="name" title="${esc(item.name)}">${esc(item.name)}</span>
+        <button class="x" title="Remove" aria-label="Remove">×</button>
+      </div>`;
+    }).join('');
+    plistPanel.innerHTML = rows;
+    // Append playlist footer with Close all at end of list
+    try{
+      var footer = document.getElementById('plistFooter');
+      if(!footer){
+        footer = document.createElement('div');
+        footer.id = 'plistFooter';
+      }
+      // Move the actual Close all button node to keep listeners
+      if (typeof closeAllBtn !== 'undefined' && closeAllBtn) {
+        // Ensure it has a visible text label in playlist context
+        (function(btn){
+          var hasText=false, spans=btn.querySelectorAll('span');
+          for(var i=0;i<spans.length;i++){ if(!spans[i].classList.contains('i') && (spans[i].textContent||'').trim()){ hasText=true; break; } }
+          if(!hasText){ var lab=document.createElement('span'); lab.textContent='Close all'; btn.appendChild(lab); }
+          footer.innerHTML=''; footer.appendChild(btn);
+        })(closeAllBtn);
+      }
+      // Place footer strictly after generated rows
+      if(footer !== plistPanel.lastElementChild) plistPanel.appendChild(footer);
+    }catch(_){}
 
-function sortByGeometry(images) {
-  return [...images].sort((a, b) => {
-    if (a.y < b.y) return -1;
-    if (a.y > b.y) return 1;
-    if (a.x < b.x) return -1;
-    if (a.x > b.x) return 1;
-    return 0;
+  
+    try{ if (typeof infoPanel!=='undefined' && infoPanel && infoPanel.classList && infoPanel.classList.contains('show')) positionInfoPanel(); }catch(_){}
+}
+  function overlayTopPx(){ const r=infoBtn.getBoundingClientRect(); return Math.round(r.top); }
+  function openPlistPanel(){
+    rebuildPlaylistPanel();
+    { const items = plistPanel.querySelectorAll('.plItem'); if(items && items.length >= 5){ plistPanel.scrollTop = Math.max(0, items[4].offsetTop - 8); } }
+    const r = plistBtn.getBoundingClientRect();
+    const margin = 12; // keep some space to see rounded corners on the right
+
+    let longest=''; for(const it of playlist){const n=it.name||''; if(n.length>longest.length) longest=n;}
+    meas.textContent = longest;
+    let desired = Math.ceil(meas.getBoundingClientRect().width) + 56;
+
+    const maxW = Math.floor(window.innerWidth * 0.8);
+    const minW = 260;
+    desired = Math.max(minW, Math.min(maxW, desired));
+
+    // Set explicit width so content fits; expand leftwards if needed
+    plistPanel.style.width = desired + 'px';
+
+    let left = Math.round(plistDock.getBoundingClientRect().right) + 8;
+    // Shift left if we would overflow on the right or get too close to the right edge
+    const rightEdge = left + desired;
+    let overflow = rightEdge + margin - window.innerWidth;
+    if(overflow > 0){ left = left - overflow; }
+    const remainingRight = window.innerWidth - (left + desired);
+    if(remainingRight < margin){ left -= (margin - remainingRight); }
+    // Clamp to screen with a small left margin
+    if(left < margin) left = margin;
+
+    plistPanel.style.left = Math.round(left) + 'px';
+    plistPanel.style.top = Math.round(r.top) + 'px';
+    plistPanel.classList.add('show');
+      try{ window.__panelState = window.__panelState || {}; window.__panelState.plist = true; }catch(_){}
+if (typeof infoPanel!=='undefined' && infoPanel && infoPanel.classList && infoPanel.classList.contains('show')) { positionInfoPanel(); }
+    }
+  function closePlistPanel() { plistPanel.classList.remove('show');
+    try{ window.__panelState = window.__panelState || {}; window.__panelState.plist = false; }catch(_){}
+try{ window.__panelState = window.__panelState || {}; window.__panelState.plist = false; window.__plistLastClosedTS = Date.now(); }catch(_){ }
+try{ if (typeof infoPanel!=='undefined' && infoPanel && infoPanel.classList && infoPanel.classList.contains('show')) positionInfoPanel(); }catch(_){ }
+   }
+  const togglePlistPanel=()=> plistPanel.classList.contains('show') ? closePlistPanel() : openPlistPanel();
+  on(plistBtn,'click', e=>{ e.stopPropagation(); togglePlistPanel(); });
+  on(plistBtn,'contextmenu', e=>{ e.preventDefault(); e.stopPropagation(); try{ clearAll(); }catch(_){ } });
+  on(document,'click', e=>{
+  const onViewer  = (e.target===viewer) || (e.target.closest && e.target.closest('#viewer'));
+  const inPlBtn   = (e.target===plistBtn) || (e.target.closest && e.target.closest('#plistBtn'));
+  const inPl      = !!(plistPanel && plistPanel.contains && plistPanel.contains(e.target));
+  const inInfoBtn = (e.target===infoBtn) || (e.target.closest && e.target.closest('#infoBtn'));
+  const inInfo    = !!(infoPanel && infoPanel.contains && infoPanel.contains(e.target));
+  if (onViewer) return;
+  if (plistPanel && !inPl && !inPlBtn && !inInfoBtn && !inInfo) closePlistPanel();
+  if (infoPanel && !inInfo && !inInfoBtn && !inPlBtn && !inPl) closeInfoPanel();
+});
+plistPanel.addEventListener('click', (e)=>{
+    // Keep panel open while interacting inside it
+    e.stopPropagation();
+    const row = e.target.closest('.plItem');
+    if(!row) return;
+    const idx = parseInt(row.getAttribute('data-idx'),10);
+    if(e.target.closest('.x')){ removeIndex(idx); return; }
+    const wasPlaying = !video.paused && haveMetadata;
+    loadIndex(idx, {autoplay:wasPlaying});
+    // refresh to update active highlight without closing
+    rebuildPlaylistUI();
   });
-}
 
-// ---------- helpers: image loading & brightness ----------
+  function removeIndex(i){
+    if(i<0 || i>=playlist.length) return;
+    const wasPlaying = !video.paused && haveMetadata;
+    const removingCurrent = (i===currentIndex);
+    // Revoke URL
+    const rev = revokers.splice(i,1)[0]; try{ if(rev) rev(); }catch(e){}
+    // Remove from playlist
+    playlist.splice(i,1);
+    if(!playlist.length){ clearAll(); openPlistPanel(); return; }
+    if(removingCurrent){
+      const target = Math.min(i, playlist.length-1);
+      loadIndex(target, {autoplay:wasPlaying});
+      rebuildPlaylistUI();
+    } else {
+      if(i < currentIndex) currentIndex -= 1; // shift left
+      rebuildPlaylistUI();
+    }
+    rebuildPlaylistPanel();
+  }
 
-function loadImage(url) {
-  return new Promise((resolve, reject) => {
-    const img = new Image();
-    img.crossOrigin = "anonymous";
-    img.onload = () => resolve(img);
-    img.onerror = reject;
-    img.src = url;
-  });
+  function clearAll(){
+    try{ video.pause(); }catch(e){}
+    video.removeAttribute('src'); video.load(); haveMetadata=false; estimatedFPS=null; pendingAutoplay=false; videoTex=null; material.map=null; material.needsUpdate=true;
+    while(revokers.length){ try{ revokers.pop()(); }catch(e){} }
+    playlist.length=0; currentIndex=-1; rebuildPlaylistUI();
+    
+    
+    try{ releasePrefetchCache(); }catch(_){ }
+try{ displayFPS = null; }catch(_){ }
+    try{ updateHUD(true); }catch(_){ }
+timeSlider.disabled=true; stepBackBtn.disabled=true; stepFwdBtn.disabled=true; playBtn.disabled=true;
+    progress.hidden=true; status.classList.add('show');
+    try{ if(window.__uiShowMenus) window.__uiShowMenus(); }catch(_){ }
+    try{ document.getElementById('viewer')?.classList.remove('ui-autoHide'); }catch(_){ } introBackdrop.classList.add('show'); statusText.innerHTML = 'Drag & Drop a video here or <b>click here</b>.';
+    tc.textContent = '00:00 / 00:00'; timeSlider.value='0'; timeSlider.max='0'; fsTimeRange.value='0'; fsTimeRange.max='0'; fsTime.textContent='00:00 / 00:00';
+    closePlistPanel(); if(plistPanel){ plistPanel.innerHTML = '<div style="padding:.6rem .8rem; color:#9aa3ad">Empty</div>'; }
+  
+    try{ closeInfoPanel(); }catch(_){ }}
+  closeAllBtn.addEventListener('click', clearAll);
+
+  
+// ===== SECTION: PREFETCH (RAM cache for small/medium files) =====
+const MAX_PREFETCH_BYTES = 2 * 1024 * 1024 * 1024; // 2 GB
+const ramCache = new Map(); // key -> { blobUrl, size, ts }
+
+function makeCacheKey(file){
+  try{ return [file.name, file.size, file.lastModified].join('|'); }catch(_){ return String(Math.random()); }
+    try{ closeInfoPanel(); }catch(_){ }
 }
 
 /**
- * Возвращает яркость и "сырую" сатурацию по ROI:
- *   - уменьшаем до smallSize
- *   - блюрим (blurPx)
- *   - обрезаем верх и боковые поля
+ * Prefetch entire file into RAM and create a Blob URL (safe fallback to original File on error).
+ * Returns: { blobUrl, fromCache: boolean }
  */
-function getBrightnessAndSaturationFromImageElement(
-  img,
-  smallSize = 50,
-  blurPx = 3,
-  cropTopRatio = 0.3,
-  cropSideRatio = 0.2
-) {
-  const canvas = document.createElement("canvas");
-  const ctx = canvas.getContext("2d");
-
-  const width = smallSize;
-  const height = smallSize;
-
-  canvas.width = width;
-  canvas.height = height;
-
-  const prevFilter = ctx.filter || "none";
-  try {
-    ctx.filter = `blur(${blurPx}px)`;
-  } catch (_) {}
-
-  ctx.drawImage(img, 0, 0, width, height);
-  ctx.filter = prevFilter;
-
-  const cropY = Math.floor(height * cropTopRatio);
-  const cropH = height - cropY;
-
-  const cropX = Math.floor(width * cropSideRatio);
-  const cropW = width - 2 * cropX;
-
-  if (cropH <= 0 || cropW <= 0) return null;
-
-  let imageData;
-  try {
-    imageData = ctx.getImageData(cropX, cropY, cropW, cropH);
-  } catch (e) {
-    console.error("getImageData failed (CORS?):", e);
-    return null;
+async function prefetchToBlobUrl(file){
+  const key = makeCacheKey(file);
+  if (ramCache.has(key)) return { blobUrl: ramCache.get(key).blobUrl, fromCache: true };
+  if (typeof file.size==='number' && file.size > MAX_PREFETCH_BYTES) {
+    // too big for prefetch — use original file directly
+    return { blobUrl: URL.createObjectURL(file), fromCache: false };
   }
-
-  const data = imageData.data;
-  const totalPixels = cropW * cropH;
-  let sumY = 0;
-  let sumDiff = 0;
-
-  for (let i = 0; i < data.length; i += 4) {
-    const r = data[i];
-    const g = data[i + 1];
-    const b = data[i + 2];
-
-    const y = 0.2126 * r + 0.7152 * g + 0.0722 * b;
-    sumY += y;
-
-    const maxv = Math.max(r, g, b);
-    const minv = Math.min(r, g, b);
-    sumDiff += maxv - minv;
+  showInfo(`Preloading: ${(file.size/1048576).toFixed(1)} MB…`);
+  try{
+    const buf = await file.arrayBuffer();
+    const blob = new Blob([buf], { type: file.type || 'application/octet-stream' });
+    const url = URL.createObjectURL(blob);
+    ramCache.set(key, { blobUrl: url, size: file.size, ts: Date.now() });
+    clearStatus();
+    return { blobUrl: url, fromCache: false };
+  }catch(e){
+    try{ reportError(e, 'prefetchToBlobUrl'); }catch(_){}
+    // fallback to direct file
+    clearStatus();
+    return { blobUrl: URL.createObjectURL(file), fromCache: false };
   }
-
-  const avgY = sumY / totalPixels;
-  const avgDiff = sumDiff / totalPixels;
-
-  const brightness = avgY / 255;
-  const saturationApprox = avgDiff / 255;
-
-  return { brightness, saturation: saturationApprox };
 }
 
-// ---------- alignment (Sorting) ----------
-
-async function alignImagesInGivenOrder(images, config) {
-  const {
-    imagesPerRow,
-    horizontalGap,
-    verticalGap,
-    sizeMode,
-    startCorner,
-  } = config;
-
-  if (!images.length) return;
-
-  if (sizeMode === "width") {
-    const targetWidth = Math.min(...images.map((img) => img.width));
-    for (const img of images) img.width = targetWidth;
-    await Promise.all(images.map((img) => img.sync()));
-  } else if (sizeMode === "height") {
-    const targetHeight = Math.min(...images.map((img) => img.height));
-    for (const img of images) img.height = targetHeight;
-    await Promise.all(images.map((img) => img.sync()));
-  }
-
-  const total = images.length;
-  const cols = Math.max(1, imagesPerRow);
-  const rows = Math.ceil(total / cols);
-
-  const rowHeights = new Array(rows).fill(0);
-  const rowWidths = new Array(rows).fill(0);
-
-  for (let i = 0; i < total; i++) {
-    const r = Math.floor(i / cols);
-    const img = images[i];
-
-    if (img.height > rowHeights[r]) rowHeights[r] = img.height;
-
-    if (rowWidths[r] > 0) rowWidths[r] += horizontalGap;
-    rowWidths[r] += img.width;
-  }
-
-  const gridWidth = rowWidths.length ? Math.max(...rowWidths) : 0;
-  const gridHeight =
-    rowHeights.reduce((sum, h) => sum + h, 0) +
-    verticalGap * Math.max(0, rows - 1);
-
-  const rowTop = new Array(rows).fill(0);
-  for (let r = 1; r < rows; r++) {
-    rowTop[r] = rowTop[r - 1] + rowHeights[r - 1] + verticalGap;
-  }
-
-  const baseX = new Array(total).fill(0);
-  const baseY = new Array(total).fill(0);
-  const rowCursorX = new Array(rows).fill(0);
-
-  for (let i = 0; i < total; i++) {
-    const r = Math.floor(i / cols);
-    const img = images[i];
-
-    const centerY = rowTop[r] + rowHeights[r] / 2;
-    const centerX = rowCursorX[r] + img.width / 2;
-
-    baseX[i] = centerX;
-    baseY[i] = centerY;
-
-    rowCursorX[r] += img.width + horizontalGap;
-  }
-
-  const bounds = images.map((img) => ({
-    left: img.x - img.width / 2,
-    top: img.y - img.height / 2,
-    right: img.x + img.width / 2,
-    bottom: img.y + img.height / 2,
-  }));
-
-  const minLeft = Math.min(...bounds.map((b) => b.left));
-  const minTop = Math.min(...bounds.map((b) => b.top));
-  const maxRight = Math.max(...bounds.map((b) => b.right));
-  const maxBottom = Math.max(...bounds.map((b) => b.bottom));
-
-  let originLeft;
-  let originTop;
-  let flipX = false;
-  let flipY = false;
-
-  switch (startCorner) {
-    case "top-left":
-      originLeft = minLeft;
-      originTop = minTop;
-      break;
-    case "top-right":
-      originLeft = maxRight - gridWidth;
-      originTop = minTop;
-      flipX = true;
-      break;
-    case "bottom-left":
-      originLeft = minLeft;
-      originTop = maxBottom - gridHeight;
-      flipY = true;
-      break;
-    case "bottom-right":
-      originLeft = maxRight - gridWidth;
-      originTop = maxBottom - gridHeight;
-      flipX = true;
-      flipY = true;
-      break;
-    default:
-      originLeft = minLeft;
-      originTop = minTop;
-  }
-
-  for (let i = 0; i < total; i++) {
-    let x0 = baseX[i];
-    let y0 = baseY[i];
-
-    if (flipX) x0 = gridWidth - x0;
-    if (flipY) y0 = gridHeight - y0;
-
-    const img = images[i];
-    img.x = originLeft + x0;
-    img.y = originTop + y0;
-  }
-
-  await Promise.all(images.map((img) => img.sync()));
+function releasePrefetchCache(){
+  try{
+    for(const {blobUrl} of ramCache.values()){
+      try{ URL.revokeObjectURL(blobUrl); }catch(_){}
+    }
+    ramCache.clear();
+  }catch(_){}
 }
+// ===== /PREFETCH =====
 
-// ---------- SORTING: by number ----------
+// === Loading ===
+  function loadURL(url, name, {autoplay=false}={}){
+    pendingAutoplay = !!autoplay;
+    // reset camera / zoom for new video
+    try{ controls.reset(); }catch(e){}
+    try{ applyFOV(80); }catch(e){} if(uvMesh) uvMesh.rotation.set(0,-Math.PI/2,0);
+    // reset fps state for new source
+    sourceFPS = null; displayFPS = null; estimatedFPS = null; updateHUD();
+    allowPlay = false; // block any unsolicited plays until we explicitly start
 
-async function sortImagesByNumber(images) {
-  const hasAnyEmptyTitle = images.some((img) => !getTitle(img));
+    // reset timeline to 0 immediately (no tiny preview)
+    timeSlider.value='0'; timeSlider.max='0'; fsTimeRange.value='0'; fsTimeRange.max='0'; tc.textContent='00:00 / 00:00'; fsTime.textContent='00:00 / 00:00';
 
-  if (hasAnyEmptyTitle) {
-    const geoOrder = sortByGeometry(images);
-    let counter = 1;
-    for (const img of geoOrder) {
-      img.title = String(counter);
-      counter++;
-    }
-    await Promise.all(geoOrder.map((img) => img.sync()));
-    images = geoOrder;
+    status.classList.add('show'); introBackdrop.classList.add('show'); progress.hidden=false; progress.value=0; haveMetadata=false; playBtn.disabled=true; stepBackBtn.disabled=true; stepFwdBtn.disabled=true; timeSlider.disabled=true;
+    showInfo(`Loading: ${name||''}`);
+
+    videoTex=null; material.map=null; material.needsUpdate=true;
+
+    // Guard any automatic plays from the element    // Remove previous playGuard if any to avoid duplicate listeners
+    try{ if(video.__playGuard){ video.removeEventListener('play', video.__playGuard); video.removeEventListener('playing', video.__playGuard); } }catch(_){ }
+
+    const playGuard = ()=>{ if(!allowPlay) { try{ video.pause(); }catch(e){} } };
+    video.addEventListener('play', playGuard, {once:false});
+    video.addEventListener('playing', playGuard, {once:false});
+    try{ video.__playGuard = playGuard; }catch(_){ }
+
+    video.src = url; try{ video.pause(); }catch(e){}; video.load();
+
+    video.addEventListener('loadedmetadata', onLoadedMetadataOnce, { once:true });
+    video.addEventListener('loadeddata', onLoadedDataOnce, { once:true });
+    video.addEventListener('canplay', onCanPlayOnce, { once:true });
+    video.addEventListener('progress', onProgress);
+    video.addEventListener('error', onVideoError, { once:true });
   }
 
-  const meta = images.map((img, index) => {
-    const title = getTitle(img);
-    const lower = title.toLowerCase();
-    const num = extractTrailingNumber(title);
-    const hasNumber = num !== null;
-    return { img, index, title, lower, hasNumber, num };
-  });
+  function onLoadedMetadataOnce(){
+    initFPSFromMetadata(currentFile).catch(e=>{ try{ reportError(e,'initFPSFromMetadata'); }catch(_){} });
+    haveMetadata = true; try{ video.currentTime = 0; }catch(e){}
+    attachVideoTexture(); decideAndApplyMode(); refreshTex();
+    timeSlider.disabled=false; playBtn.disabled=false; stepBackBtn.disabled=false; stepFwdBtn.disabled=false;
+  }
 
-  console.groupCollapsed("Sorting (number) – titles & numbers");
-  meta.forEach((m) => console.log(m.title || m.img.id, "=>", m.num));
-  console.groupEnd();
+  function onLoadedDataOnce(){
+    // Ensure texture is attached and first frame is uploaded
+    attachVideoTexture();
+    decideAndApplyMode();
+    refreshTex();
+    fitPlane();
+    applyFOV(defaultFOV());
+    // Hide overlays as soon as we have the first decodable frame
+    progress.hidden = true;
+    clearStatus();
+    introBackdrop.classList.remove('show');
+    updateUI(true);
+  }
 
-  meta.sort((a, b) => {
-    if (a.hasNumber && !b.hasNumber) return -1;
-    if (!a.hasNumber && b.hasNumber) return 1;
+  function onCanPlayOnce(){
+    progress.hidden=true; clearStatus(); introBackdrop.classList.remove('show'); updateUI(true);
+    if(pendingAutoplay){ video.currentTime = 0; allowPlay = true; video.play().catch(()=>{}); } else { allowPlay=false; video.pause(); }
+    updatePlayBtn();
+    // Measure FPS only if playing; never start playback for it
+    setTimeout(()=>{ if(!video.paused) autoEstimateFPS(); }, 600);
+  }
 
-    if (a.hasNumber && b.hasNumber) {
-      if (a.num !== b.num) return a.num - b.num;
-      if (a.lower < b.lower) return -1;
-      if (a.lower > b.lower) return 1;
-      return a.index - b.index;
-    }
+  async function autoEstimateFPS(){
+    if(video.paused) return; // never start playback for measurement
+    let frames=0; let startMedia=null; let endMedia=null; const durationSec=0.5; const startWall=performance.now();
+    const cb=(now,meta)=>{ frames++; if(startMedia===null) startMedia = meta.mediaTime; endMedia = meta.mediaTime; if(performance.now()-startWall < durationSec*1000){ video.requestVideoFrameCallback(cb);} };
+    if(video.requestVideoFrameCallback) video.requestVideoFrameCallback(cb);
+    await new Promise(r=> setTimeout(r, durationSec*1000 + 20));
+    const delta = (endMedia!==null && startMedia!==null) ? (endMedia - startMedia) : 0;
+    const fps = delta>0 ? Math.round(frames/delta) : frames/durationSec;
+    estimatedFPS = (Number.isFinite(fps) && fps>0) ? Math.min(240, Math.max(1, Math.round(fps))) : 30;
+    if(!displayFPS && estimatedFPS) displayFPS = Math.round(estimatedFPS);
+  }
 
-    if (a.lower < b.lower) return -1;
-    if (a.lower > b.lower) return 1;
-    return a.index - b.index;
-  });
+  function onProgress(){ try{ if(video.buffered.length){ const end = video.buffered.end(video.buffered.length-1); const ratio = Math.min(1, (video.duration? end/video.duration : 0)); progress.value = ratio; } }catch(e){} }
+  function onVideoError(){ alert('Playback error. The codec may not be supported by this browser.'); status.classList.remove('show'); introBackdrop.classList.remove('show'); progress.hidden=true; }
 
-  return meta.map((m) => m.img);
+  // === Playback ===
+  function setPlayUI(isPlaying){
+    const svgPlay = '<svg viewBox=\"0 0 24 24\" fill=\"currentColor\"><path d=\"M8 5l10 7l-10 7z\"/></svg>';
+    const svgPause = '<svg viewBox=\"0 0 24 24\" fill=\"currentColor\"><path d=\"M7 5h4v14H7z\"/><path d=\"M13 5h4v14h-4z\"/></svg>';
+    playLabel.textContent = isPlaying ? 'Pause' : 'Play';
+    playIcon.innerHTML = isPlaying ? svgPause : svgPlay;
+  }
+  function updatePlayBtn(){ setPlayUI(!video.paused && !video.ended); }
+  function togglePlay(){ if(!haveMetadata) return; if(video.paused){ allowPlay=true; try{ video.play(); }catch(e){} } else { allowPlay=true; video.pause(); } updatePlayBtn(); }
+  playBtn.addEventListener('click', togglePlay);
+
+  // === Smooth scrubbing (seek queue + Firefox rAF fallback) ===
+  let scrubWasPlaying = false;
+  let seeking = false;           // true while a seek is in-flight (non-FF path)
+  let pendingSeek = null;        // last requested time, if any (non-FF path)
+  let scrubRAF = null;           // firefox fallback loop handle
+  let desiredTime = null;        // firefox target time during scrubbing
+
+  
+// helper: clamp time into [0, duration]
+function clampTime(t){
+  try{
+    const d = isFinite(video.duration||NaN) ? video.duration : 0;
+    return Math.max(0, Math.min(d, +t||0));
+  }catch(_){ return Math.max(0, +t||0); }
 }
+// ===== SECTION: PLAYER SEEK/STEP =====
 
-// ---------- SORTING: by color (по Cxx/yyy в title) ----------
-
-async function sortImagesByColor(images) {
-  const meta = images.map((img, index) => {
-    const title = getTitle(img);
-    const match = title.match(/^C(\d{2})\/(\d{3})\s+/);
-
-    if (!match) {
-      return {
-        img,
-        index,
-        title,
-        hasCode: false,
-        group: 1,
-        satCode: null,
-        briCode: null,
-      };
+function seekTo(t){
+try{
+    const t2 = clampTime(t);
+    if (!isFinite(t2)) return;
+    video.currentTime = t2;
+    updateUI(true);
+  }catch(_){}
+}
+  function queueSeek(t){
+    pendingSeek = t;
+    if(!seeking){
+      seeking = true;
+      seekTo(t);
     }
-
-    const satCode = Number.parseInt(match[1], 10);
-    const briCode = Number.parseInt(match[2], 10);
-    const group = satCode <= SAT_GROUP_THRESHOLD ? 0 : 1;
-
-    return {
-      img,
-      index,
-      title,
-      hasCode: true,
-      satCode,
-      briCode,
-      group,
+  }
+  function startScrubRAF(){
+    if(scrubRAF) return;
+    const tick = () => {
+      if(!isScrubbing){ scrubRAF=null; return; }
+      if(desiredTime!=null){ seekTo(desiredTime); if(videoTex) videoTex.needsUpdate = true; }
+      scrubRAF = requestAnimationFrame(tick);
     };
-  });
-
-  const anyCode = meta.some((m) => m.hasCode);
-  if (!anyCode) {
-    console.warn(
-      "No color codes found in titles; falling back to geometry sort."
-    );
-    return sortByGeometry(images);
+    scrubRAF = requestAnimationFrame(tick);
   }
 
-  console.groupCollapsed("Sorting (color) – titles, sat & bri");
-  meta.forEach((m) => {
-    console.log(
-      m.title || m.img.id,
-      "=>",
-      m.hasCode
-        ? `group=${m.group}, sat=${m.satCode}, bri=${m.briCode}`
-        : "no-code"
-    );
-  });
-  console.groupEnd();
+  function beginScrub(){ try{ state.isScrubbing = true; }catch(_){} 
+    if(!haveMetadata) return;
+    scrubWasPlaying = !video.paused;
+    if(scrubWasPlaying){ allowPlay = false; video.pause(); }
+    isScrubbing = true;
+    if(isFirefox) startScrubRAF();
+  }
+  function endScrub(){ try{ state.isScrubbing = false; }catch(_){} 
+    isScrubbing = false;
+    if(isFirefox && scrubRAF){ cancelAnimationFrame(scrubRAF); scrubRAF=null; desiredTime=null; }
+    if(scrubWasPlaying){ allowPlay = true; video.play().catch(()=>{}); }
+    updateUI(true);
+  }
 
-  meta.sort((a, b) => {
-    if (a.hasCode && b.hasCode) {
-      if (a.group !== b.group) return a.group - b.group;
-      if (a.briCode !== b.briCode) return a.briCode - b.briCode;
-      if (a.satCode !== b.satCode) return a.satCode - b.satCode;
-      return a.index - b.index;
-    }
-    if (a.hasCode) return -1;
-    if (b.hasCode) return 1;
-    return a.index - b.index;
-  });
-
-  return meta.map((m) => m.img);
-}
-
-// ---------- SORTING handler ----------
-
-async function handleSortingSubmit(event) {
-  event.preventDefault();
-
-  try {
-    const form = document.getElementById("sorting-form");
-    if (!form) return;
-
-    const imagesPerRow = Number(form.sortingImagesPerRow.value) || 1;
-    const horizontalGap = Number(form.sortingHorizontalGap.value) || 0;
-    const verticalGap = Number(form.sortingVerticalGap.value) || 0;
-    const sizeMode = form.sortingSizeMode.value;
-    const startCorner = form.sortingStartCorner.value;
-    const sortModeEl = document.getElementById("sortingSortMode");
-    const sortMode = sortModeEl ? sortModeEl.value : "number";
-
-    const selection = await board.getSelection();
-    let images = selection.filter((i) => i.type === "image");
-
-    if (!images.length) {
-      await board.notifications.showInfo(
-        "Select at least one image on the board."
-      );
-      return;
-    }
-
-    if (imagesPerRow < 1) {
-      await board.notifications.showError("“Rows” must be greater than 0.");
-      return;
-    }
-
-    let orderedImages;
-
-    if (sortMode === "color") {
-      await board.notifications.showInfo("Sorting by color…");
-      orderedImages = await sortImagesByColor(images);
-    } else {
-      orderedImages = await sortImagesByNumber(images);
-    }
-
-    await alignImagesInGivenOrder(orderedImages, {
-      imagesPerRow,
-      horizontalGap,
-      verticalGap,
-      sizeMode,
-      startCorner,
+  function bindRange(el){
+    el.addEventListener('pointerdown', (e)=>{ e.stopPropagation(); beginScrub(); }, {passive:false});
+    el.addEventListener('mousedown', (e)=>{ e.stopPropagation(); }, {passive:true});
+    el.addEventListener('touchstart', (e)=>{ e.stopPropagation(); beginScrub(); }, {passive:true});
+    el.addEventListener('input', ()=>{
+      if(!haveMetadata) return;
+      const t = parseFloat(el.value)||0;
+      // mirror to the other slider
+      if(el===timeSlider){ fsTimeRange.value = String(t); } else { timeSlider.value = String(t); }
+      if(isFirefox){ desiredTime = t; } else { queueSeek(t); }
     });
-
-    await board.notifications.showInfo(
-      `Done: aligned ${orderedImages.length} image${
-        orderedImages.length === 1 ? "" : "s"
-      }.`
-    );
-  } catch (err) {
-    console.error(err);
-    await board.notifications.showError(
-      "Something went wrong while aligning images. Please check the console."
-    );
+    el.addEventListener('pointermove', (e)=>{ if(isScrubbing) e.stopPropagation(); }, {passive:true});
+    el.addEventListener('change', endScrub);
   }
-}
+  bindRange(timeSlider); bindRange(fsTimeRange);
 
-// ---------- STITCH/S SLICE helpers ----------
-
-function readFileAsDataUrl(file) {
-  return new Promise((resolve, reject) => {
-    const reader = new FileReader();
-    reader.onload = () => resolve(reader.result);
-    reader.onerror = reject;
-    reader.readAsDataURL(file);
-  });
-}
-
-function sortFilesByNameWithNumber(files) {
-  const arr = Array.from(files).map((file, index) => {
-    const name = file.name || "";
-    const lower = name.toLowerCase();
-    const num = extractTrailingNumber(name);
-    return {
-      file,
-      index,
-      name,
-      lower,
-      hasNumber: num !== null,
-      num,
-    };
+  video.addEventListener('seeked', ()=>{
+    if(videoTex) videoTex.needsUpdate = true;
+    updateUI(true);
+    if(pendingSeek !== null){
+      const t = pendingSeek; pendingSeek = null;
+      seekTo(t);
+    } else {
+      seeking = false;
+    }
   });
 
-  console.groupCollapsed("Stitch/Slice – files & numbers");
-  arr.forEach((m) => console.log(m.name, "=>", m.num));
-  console.groupEnd();
-
-  const anyHasNumber = arr.some((m) => m.hasNumber);
-
-  if (!anyHasNumber) {
-    // если ни у кого нет номера — просто рандомно перемешиваем
-    for (let i = arr.length - 1; i > 0; i--) {
-      const j = Math.floor(Math.random() * (i + 1));
-      [arr[i], arr[j]] = [arr[j], arr[i]];
-    }
-  } else {
-    arr.sort((a, b) => {
-      if (a.hasNumber && !b.hasNumber) return -1;
-      if (!a.hasNumber && b.hasNumber) return 1;
-
-      if (a.hasNumber && b.hasNumber) {
-        if (a.num !== b.num) return a.num - b.num;
-        if (a.lower < b.lower) return -1;
-        if (a.lower > b.lower) return 1;
-        return a.index - b.index;
+  // === Frame stepping (auto FPS) ===
+  function getFPS(){ return (displayFPS && isFinite(displayFPS) && displayFPS>0) ? displayFPS : (estimatedFPS || 30); }
+  
+async function stepFrames(n){
+  try{
+    if(!haveMetadata) return;
+    const dir = (n|0) >= 0 ? 1 : -1;
+    if (window.__stepLock) { window.__stepQueued = dir; return; }
+    window.__stepLock = true;
+    try{
+      await __stepOnce(dir);
+    } finally {
+      window.__stepLock = false;
+      if (window.__stepQueued) {
+        const q = window.__stepQueued; window.__stepQueued = 0;
+        setTimeout(()=>{ stepFrames(q); }, 0);
       }
-
-      if (a.lower < b.lower) return -1;
-      if (a.lower > b.lower) return 1;
-      return a.index - b.index;
-    });
-  }
-
-  return arr.map((m) => m.file);
+    }
+  }catch(_){}
 }
 
-function canvasToDataUrlUnderLimit(canvas, maxBytes = TARGET_URL_BYTES) {
-  // Цель: держать качество около 0.8–0.85 (примерно Photoshop 10–11),
-  // но при этом НИКОГДА не пробивать жесткий лимит Miro по размеру dataURL.
-  //
-  // Алгоритм:
-  // 1) Пробуем уложиться в target (maxBytes) качеством 0.85 → 0.82 → 0.80.
-  // 2) Если target не достигается при 0.80 — оставляем 0.80 (размер будет больше target, но качество лучше).
-  // 3) Если даже так превышаем жесткий лимит MAX_URL_BYTES — тогда уже снижаем качество ниже 0.80,
-  //    пока не уложимся в MAX_URL_BYTES (чтобы не было падений/пропусков).
-
-  const hardLimit = MAX_URL_BYTES;
-  const target = Math.min(maxBytes, hardLimit);
-
-  const tryQualities = [0.85, 0.82, 0.8];
-  for (const q of tryQualities) {
-    const dataUrl = canvas.toDataURL("image/jpeg", q);
-    if (dataUrl.length <= target) return dataUrl;
-  }
-
-  // Не влезли в target при 0.8 — оставляем 0.8 (это сознательный компромисс ради качества).
-  let quality = 0.8;
-  let dataUrl = canvas.toDataURL("image/jpeg", quality);
-  if (dataUrl.length <= hardLimit) return dataUrl;
-
-  // Крайний случай: даже при 0.8 пробиваем hardLimit — уменьшаем качество, чтобы гарантированно не падать.
-  const HARD_MIN_Q = 0.25;
-  while (dataUrl.length > hardLimit && quality > HARD_MIN_Q) {
-    quality -= 0.05;
-    dataUrl = canvas.toDataURL("image/jpeg", quality);
-  }
-
-  // Последняя страховка
-  if (dataUrl.length > hardLimit) {
-    dataUrl = canvas.toDataURL("image/jpeg", HARD_MIN_Q);
-  }
-
-  return dataUrl;
-}
-
-
-function computeVariableSlotCenters(
-  orderedInfos,
-  imagesPerRow,
-  startCorner,
-  viewCenterX,
-  viewCenterY
-) {
-  const totalSlots = orderedInfos.length;
-  if (!totalSlots) return [];
-
-  const cols = Math.max(1, imagesPerRow);
-  const rows = Math.ceil(totalSlots / cols);
-  const horizontalGap = 0;
-  const verticalGap = 0;
-
-  const rowHeights = new Array(rows).fill(0);
-  const rowWidths = new Array(rows).fill(0);
-
-  for (let i = 0; i < totalSlots; i++) {
-    const r = Math.floor(i / cols);
-    const info = orderedInfos[i];
-    const w = info.width;
-    const h = info.height;
-
-    if (h > rowHeights[r]) rowHeights[r] = h;
-    if (rowWidths[r] > 0) rowWidths[r] += horizontalGap;
-    rowWidths[r] += w;
-  }
-
-  const gridWidth = rowWidths.length ? Math.max(...rowWidths) : 0;
-  const gridHeight =
-    rowHeights.reduce((sum, h) => sum + h, 0) +
-    verticalGap * Math.max(0, rows - 1);
-
-  const rowTop = new Array(rows).fill(0);
-  for (let r = 1; r < rows; r++) {
-    rowTop[r] = rowTop[r - 1] + rowHeights[r - 1] + verticalGap;
-  }
-
-  const baseX = new Array(totalSlots).fill(0);
-  const baseY = new Array(totalSlots).fill(0);
-  const rowCursorX = new Array(rows).fill(0);
-
-  for (let i = 0; i < totalSlots; i++) {
-    const r = Math.floor(i / cols);
-    const info = orderedInfos[i];
-    const w = info.width;
-
-    const centerY = rowTop[r] + rowHeights[r] / 2;
-    const centerX = rowCursorX[r] + w / 2;
-
-    baseX[i] = centerX;
-    baseY[i] = centerY;
-
-    rowCursorX[r] += w + horizontalGap;
-  }
-
-  let flipX = false;
-  let flipY = false;
-  switch (startCorner) {
-    case "top-right":
-      flipX = true;
-      break;
-    case "bottom-left":
-      flipY = true;
-      break;
-    case "bottom-right":
-      flipX = true;
-      flipY = true;
-      break;
-    default:
-      break;
-  }
-
-  const centers = [];
-  for (let i = 0; i < totalSlots; i++) {
-    let x0 = baseX[i] - gridWidth / 2;
-    let y0 = baseY[i] - gridHeight / 2;
-
-    if (flipX) x0 = -x0;
-    if (flipY) y0 = -y0;
-
-    const cx = viewCenterX + x0;
-    const cy = viewCenterY + y0;
-    centers.push({ x: cx, y: cy });
-  }
-
-  return centers;
-}
-
-function computeSkipMissingSlotCenters(
-  tileInfos,
-  imagesPerRow,
-  startCorner,
-  viewCenterX,
-  viewCenterY
-) {
-  if (!tileInfos.length) return [];
-
-  const nums = tileInfos.map((n) => n.num);
-  const minNum = Math.min(...nums);
-  const maxNum = Math.max(...nums);
-
-  const cols = Math.max(1, imagesPerRow);
-  const cellWidth = tileInfos[0].info.width;
-  const cellHeight = tileInfos[0].info.height;
-
-  const totalSlots = maxNum - minNum + 1;
-  const rows = Math.ceil(totalSlots / cols);
-
-  const gridWidth = cols * cellWidth;
-  const gridHeight = rows * cellHeight;
-
-  let flipX = false;
-  let flipY = false;
-  switch (startCorner) {
-    case "top-right":
-      flipX = true;
-      break;
-    case "bottom-left":
-      flipY = true;
-      break;
-    case "bottom-right":
-      flipX = true;
-      flipY = true;
-      break;
-    default:
-      break;
-  }
-
-  const centersByFileId = new Map();
-
-  for (const { info, num } of tileInfos) {
-    const pos = num - minNum;
-    let row = Math.floor(pos / cols);
-    let col = pos % cols;
-
-    if (flipX) col = cols - 1 - col;
-    if (flipY) row = rows - 1 - row;
-
-    const left = viewCenterX - gridWidth / 2 + col * cellWidth;
-    const top = viewCenterY - gridHeight / 2 + row * cellHeight;
-
-    const cx = left + cellWidth / 2;
-    const cy = top + cellHeight / 2;
-
-    centersByFileId.set(info.file, { x: cx, y: cy });
-  }
-
-  return centersByFileId;
-}
-
-// ---------- STITCH/S SLICE handler ----------
-
-async function handleStitchSubmit(event) {
-  event.preventDefault();
-
-
-  // ---- run-level timers & stats (declared early to avoid TDZ across reruns) ----
-  var prepStartTs = performance.now();
-  var prepEndTs = null;
-  var uploadStartTs = null;
-  var uploadEndTs = null;
-  var uploadRetryEvents = 0;
-  var uploadedBytesDone = 0;
-
-  // createImage wall-time (includes retries/backoff)
-  var createImageWallTimesMs = [];
-  var createImageWallTimeSumMs = 0;
-  var createImageWallTimeCount = 0;
-
-  const stitchButton = document.getElementById("stitchButton");
-  const progressBarEl = document.getElementById("stitchProgressBar");
-  const progressMainEl = document.getElementById("stitchProgressMain");
-  const progressEtaEl = document.getElementById("stitchProgressEta");
-
-  // Stage label under the progress bar (inserted dynamically to avoid editing panel.html)
-  let progressStageEl = document.getElementById("stitchProgressStage");
-  if (!progressStageEl && progressMainEl && progressMainEl.parentNode) {
-    progressStageEl = document.createElement("div");
-    progressStageEl.id = "stitchProgressStage";
-    progressStageEl.style.textAlign = "center";
-    progressStageEl.style.fontWeight = "600";
-    progressStageEl.style.margin = "6px 0 2px";
-    progressStageEl.style.fontSize = "12px";
-    progressStageEl.style.userSelect = "none";
-    progressMainEl.parentNode.insertBefore(progressStageEl, progressMainEl);
-  }
-
-
-  const STAGES_TOTAL = 2;
-  let stageIndex = 1; // 1/2 = Preparing, 2/2 = Uploading
-
-  const setStage = (idx) => {
-    stageIndex = Math.max(1, Math.min(STAGES_TOTAL, idx));
-    if (progressStageEl) {
-      progressStageEl.textContent = `Stage ${stageIndex}/${STAGES_TOTAL}`;
-    }
-  };
-
-  let setProgress = (done, total, labelOverride, displayDone, displayTotal) => {
-  // total === 0 используется для "статусных" сообщений (например, Calculating layout…)
-  // В этом случае НЕ трогаем ширину прогресс-бара, чтобы не было скачков.
-  if (total > 0 && progressBarEl) {
-    const frac = done / total;
-    progressBarEl.style.width = `${(frac * 100).toFixed(1)}%`;
-  }
-
-  if (!progressMainEl) return;
-
-  const labelRaw = labelOverride !== undefined ? String(labelOverride) : "Creating";
-  const label = labelRaw;
-
-  // For some phases (e.g., Preparing), we want the progress bar to use "done/total steps"
-  // but the visible counter to stay on "filesDone/filesTotal" to avoid confusion like 260/260 for 256 files.
-  const showDisplayCounts =
-    Number.isFinite(displayTotal) && displayTotal > 0 && Number.isFinite(displayDone);
-
-  if (total > 0) {
-    if (done < total) {
-      progressMainEl.textContent = showDisplayCounts ? `${label} ${displayDone} / ${displayTotal}` : `${label} ${done} / ${total}`;
-    } else {
-      // Не показываем "Done!" после Preparing — это выглядит как будто всё закончилось.
-      const keepCounts = labelRaw.startsWith("Preparing") || labelRaw.startsWith("Uploading");
-      progressMainEl.textContent = keepCounts ? (showDisplayCounts ? `${label} ${displayDone} / ${displayTotal}` : `${label} ${done} / ${total}`) : "Done!";
-    }
-    return;
-  }
-
-  // total === 0: просто статусная строка
-  progressMainEl.textContent = labelOverride !== undefined ? label : "";
-};
-
-  let setEtaText = (ms) => {
-    if (!progressEtaEl) return;
-    if (ms == null || !Number.isFinite(ms) || ms < 0) {
-      progressEtaEl.textContent = "";
-      return;
-    }
-    const totalSeconds = Math.round(ms / 1000);
-    const mins = Math.floor(totalSeconds / 60);
-    const secs = totalSeconds % 60;
-    const secsStr = secs.toString().padStart(2, "0");
-    const text = mins ? `${mins}m ${secsStr}s left` : `${secsStr}s left`;
-    progressEtaEl.textContent = text;
-  };
-
-
-// ---- UI update throttling (avoids excessive DOM reflows on 1000+ tiles) ----
-const makeThrottled = (fn, intervalMs = 200) => {
-  let lastCall = 0;
-  let timer = null;
-  let lastArgs = null;
-
-  const throttled = (...args) => {
-    lastArgs = args;
-    const now = performance.now();
-    const elapsed = now - lastCall;
-
-    if (elapsed >= intervalMs) {
-      lastCall = now;
-      fn(...lastArgs);
-      return;
-    }
-
-    if (timer) return;
-
-    timer = setTimeout(() => {
-      timer = null;
-      lastCall = performance.now();
-      fn(...lastArgs);
-    }, Math.max(0, intervalMs - elapsed));
-  };
-
-  throttled.flush = () => {
-    if (timer) {
-      clearTimeout(timer);
-      timer = null;
-    }
-    if (lastArgs) {
-      lastCall = performance.now();
-      fn(...lastArgs);
-    }
-  };
-
-  return throttled;
-};
-
-// Wrap progress UI updates with throttling (only once per session)
-if (!setProgress._throttleWrapped) {
-  const _setProgressNow = setProgress;
-  const _setEtaTextNow = setEtaText;
-  const sp = makeThrottled(_setProgressNow, 200);
-  const se = makeThrottled(_setEtaTextNow, 200);
-  sp._throttleWrapped = true;
-  se._throttleWrapped = true;
-  setProgress = sp;
-  setEtaText = se;
-}
-  try {
-    prepStartTs = performance.now();
-
-    const form = document.getElementById("stitch-form");
-    if (!form) return;
-
-    const imagesPerRow = Number(form.stitchImagesPerRow.value) || 1;
-    const startCorner = form.stitchStartCorner.value;
-    const skipMissingTiles = form.stitchSkipMissing.checked;
-
-    const input = document.getElementById("stitchFolderInput");
-    const files = input ? input.files : null;
-
-    if (!files || !files.length) {
-      await board.notifications.showError(
-        "Please select one or more image files."
-      );
-      return;
-    }
-
-    if (imagesPerRow < 1) {
-      await board.notifications.showError("“Rows” must be greater than 0.");
-      return;
-    }
-
-    if (stitchButton) stitchButton.disabled = true;
-    setProgress(0, 0, "");
-    setEtaText(null);
-    if (setEtaText.flush) setEtaText.flush();
-
-
-    const filesArray = Array.from(files);
-
-    // Stage 1/2: preparing (decode + analyze + planning). Мы НЕ храним base64 в памяти.
-    setStage(1);
-    const PREP_EXTRA_STEPS = 4; // sorting + indexing + tile counting + layout planning
-    const prepTotalSteps = filesArray.length + PREP_EXTRA_STEPS;
-
-    // ---- ETA for preparing (Stage 1/2) ----
-    let prepLastTs = null;
-    let prepLastDone = 0;
-    let ewmaPrepRateStepsPerMs = null;
-    const PREP_ETA_EWMA_ALPHA = 0.25;
-
-    const startPrepEta = () => {
-      prepLastTs = performance.now();
-
-      prepLastDone = 0;
-      ewmaPrepRateStepsPerMs = null;
-      setEtaText(null);
-    };
-
-    const updatePrepEta = (doneSteps, totalSteps) => {
-      if (!prepStartTs || !Number.isFinite(totalSteps) || totalSteps <= 0) return;
-
-      const now = performance.now();
-      const dt = now - (prepLastTs || now);
-      const dd = doneSteps - prepLastDone;
-
-      if (dt < 200 || dd <= 0) return;
-
-      const instRate = dd / dt; // steps per ms
-      ewmaPrepRateStepsPerMs =
-        ewmaPrepRateStepsPerMs == null
-          ? instRate
-          : PREP_ETA_EWMA_ALPHA * instRate + (1 - PREP_ETA_EWMA_ALPHA) * ewmaPrepRateStepsPerMs;
-
-      prepLastTs = now;
-      prepLastDone = doneSteps;
-
-      const remaining = totalSteps - doneSteps;
-      if (remaining <= 0 || !ewmaPrepRateStepsPerMs || ewmaPrepRateStepsPerMs <= 0) {
-        setEtaText(null);
-        return;
-      }
-      const etaMs = remaining / ewmaPrepRateStepsPerMs;
-      setEtaText(etaMs);
-    };
-
-    let viewCenterX = 0;
-    let viewCenterY = 0;
-    try {
-      const viewport = await board.viewport.get();
-      viewCenterX = viewport.x + viewport.width / 2;
-      viewCenterY = viewport.y + viewport.height / 2;
-    } catch (e) {
-      console.warn("Stitch/Slice: could not get viewport, fallback to 0,0", e);
-    }
-
-    const fileInfos = [];
-    let anySliced = false;
-
-        startPrepEta();
-setProgress(0, prepTotalSteps, "Preparing files…", 0, filesArray.length);
-
-    for (let i = 0; i < filesArray.length; i++) {
-      const file = filesArray[i];
-      // Обновляем прогресс на этапе подготовки файлов
-      setProgress(i + 1, prepTotalSteps, "Preparing files…", i + 1, filesArray.length);
-      updatePrepEta(i + 1, prepTotalSteps);
-      // Даем браузеру шанс отрисовать прогресс на больших партиях
-      await new Promise((r) => setTimeout(r, 0));
-// Используем object URL вместо dataURL, чтобы не держать гигантские base64-строки в памяти.
-const objectUrl = URL.createObjectURL(file);
-
-let imgEl;
-try {
-  // Для objectUrl crossOrigin не нужен, но в loadImage он выставлен — это ок.
-  imgEl = await loadImage(objectUrl);
-        URL.revokeObjectURL(objectUrl);
-} catch (e) {
-        URL.revokeObjectURL(objectUrl);
-
-        console.error("Stitch/Slice: browser failed to decode image", file.name, e);
-        await board.notifications.showError(
-          `Cannot import "${file.name}": browser failed to decode the image.`
-        );
-        continue;
-      }
-
-      const width = imgEl.naturalWidth || imgEl.width;
-      const height = imgEl.naturalHeight || imgEl.height;
-
-      if (!width || !height) {
-        console.error("Stitch/Slice: invalid dimensions", width, height, file.name);
-        await board.notifications.showError(
-          `Cannot import "${file.name}": image has invalid dimensions.`
-        );
-        continue;
-      }
-
-      if (width > MAX_SLICE_DIM || height > MAX_SLICE_DIM) {
-        console.warn(
-          `Stitch/Slice: image too large (${width}x${height}), limit is ${MAX_SLICE_DIM}px per side.`
-        );
-        await board.notifications.showError(
-          `Image "${file.name}" is too large (${width}×${height}). ` +
-            `Stitch/Slice supports up to ${MAX_SLICE_DIM}px per side on this device. ` +
-            `Please downscale or pre-slice it externally.`
-        );
-        continue;
-      }
-
-      let brightness = 0.5;
-      let saturation = 0.0;
-      try {
-        const res = getBrightnessAndSaturationFromImageElement(imgEl);
-        if (res) {
-          brightness = res.brightness;
-          saturation = res.saturation;
-        }
-      } catch (e) {
-        console.warn(
-          "Stitch/Slice: brightness/saturation calc failed for",
-          file.name,
-          e
-        );
-      }
-
-      const briCodeRaw = Math.round((1 - brightness) * 999);
-      const briCode = Math.max(0, Math.min(999, briCodeRaw));
-
-      const boostedSat = Math.min(1, saturation * SAT_BOOST);
-      const satCodeRaw = Math.round(boostedSat * SAT_CODE_MAX);
-      const satCode = Math.max(0, Math.min(SAT_CODE_MAX, satCodeRaw));
-
-      const needsSlice =
-        width > SLICE_THRESHOLD_WIDTH || height > SLICE_THRESHOLD_HEIGHT;
-
-      if (needsSlice) anySliced = true;
-
-      let tilesX = 1;
-      let tilesY = 1;
-      let numTiles = 1;
-      if (needsSlice) {
-        tilesX = Math.ceil(width / SLICE_TILE_SIZE);
-        tilesY = Math.ceil(height / SLICE_TILE_SIZE);
-        numTiles = tilesX * tilesY;
-      }
-      // Освобождаем ссылку на декодированное изображение (помогает GC на больших партиях)
-      try { imgEl.src = ""; } catch (e) {}
-
-
-      fileInfos.push({
-        file,
-        width,
-        height,
-        briCode,
-        satCode,
-        needsSlice,
-        tilesX,
-        tilesY,
-        numTiles,
-      });
-    }
-
-    // Доп. шаги подготовки (раньше здесь было ощущение "простоя")
-    let prepDone = filesArray.length;
-
-    if (!fileInfos.length) {
-      setProgress(0, 0, "Nothing to import.");
-      setEtaText(null);
-      return;
-    }
-
-    // 1) sorting
-    prepDone += 1;
-    setProgress(prepDone, prepTotalSteps, "Preparing files… (sorting)", filesArray.length, filesArray.length);
-    updatePrepEta(prepDone, prepTotalSteps);
-    await new Promise((r) => setTimeout(r, 0));
-
-    const orderedFiles = sortFilesByNameWithNumber(filesArray);
-
-    // 2) indexing
-    prepDone += 1;
-    setProgress(prepDone, prepTotalSteps, "Preparing files… (indexing)", filesArray.length, filesArray.length);
-    updatePrepEta(prepDone, prepTotalSteps);
-    await new Promise((r) => setTimeout(r, 0));
-    const infoByFile = new Map();
-    fileInfos.forEach((info) => infoByFile.set(info.file, info));
-
-    const orderedInfos = orderedFiles
-      .map((f) => infoByFile.get(f))
-      .filter(Boolean);
-
-    if (!orderedInfos.length) {
-      setProgress(0, 0, "Nothing to import.");
-      setEtaText(null);
-      return;
-    }
-
-    // 3) tile counting
-    prepDone += 1;
-    setProgress(prepDone, prepTotalSteps, "Preparing files… (counting tiles)", filesArray.length, filesArray.length);
-    updatePrepEta(prepDone, prepTotalSteps);
-    await new Promise((r) => setTimeout(r, 0));
-
-    const totalTiles = orderedInfos.reduce(
-      (sum, info) => sum + (info.needsSlice ? info.numTiles : 1),
-      0
-    );
-
-    if (anySliced && skipMissingTiles) {
-      await board.notifications.showInfo(
-        '“Skip missing tiles” is ignored for large images (Stitch/Slice).'
-      );
-    }
-
-    // 4) layout planning (не доводим прогресс до 100% ДО завершения расчётов)
-    setProgress(prepDone, prepTotalSteps, "Preparing files… (layout)", filesArray.length, filesArray.length);
-    updatePrepEta(prepDone, prepTotalSteps);
-    await new Promise((r) => setTimeout(r, 0));
-
-let slotCentersByFile = null;
-    let slotCentersArray = null;
-
-    const hasAnyNumber = orderedInfos.some((info) => {
-      const name = info.file.name || "";
-      return extractTrailingNumber(name) !== null;
-    });
-
-    if (!anySliced && skipMissingTiles && hasAnyNumber) {
-      const tileInfos = [];
-      let minNum = Infinity;
-      let maxNum = -Infinity;
-
-      for (const info of orderedInfos) {
-        const name = info.file.name || "";
-        const num = extractTrailingNumber(name);
-        if (num === null) continue;
-        tileInfos.push({ info, num });
-        if (num < minNum) minNum = num;
-        if (num > maxNum) maxNum = num;
-      }
-
-      if (!tileInfos.length) {
-        slotCentersArray = computeVariableSlotCenters(
-          orderedInfos,
-          imagesPerRow,
-          startCorner,
-          viewCenterX,
-          viewCenterY
-        );
-      } else {
-        let current = maxNum;
-        for (const info of orderedInfos) {
-          const already = tileInfos.find((t) => t.info.file === info.file);
-          if (!already) {
-            current += 1;
-            tileInfos.push({ info, num: current });
-          }
-        }
-        slotCentersByFile = computeSkipMissingSlotCenters(
-          tileInfos,
-          imagesPerRow,
-          startCorner,
-          viewCenterX,
-          viewCenterY
-        );
-      }
-    } else {
-      slotCentersArray = computeVariableSlotCenters(
-        orderedInfos,
-        imagesPerRow,
-        startCorner,
-        viewCenterX,
-        viewCenterY
-      );
-    }
-
-    // Завершили layout planning
-    prepDone += 1;
-    setProgress(prepDone, prepTotalSteps, "Preparing files… (layout)", filesArray.length, filesArray.length);
-    updatePrepEta(prepDone, prepTotalSteps);
-    await new Promise((r) => setTimeout(r, 0));
-
-    const allCreatedTiles = [];
-    let createdTiles = 0;
-
-    // ---- ETA: считаем по фактической пропускной способности (учитывает параллелизм) ----
-    // adaptive concurrency diagnostics
-    let maxConcurrencySeen = 0;
-    const concurrencyDecisions = []; // {idx, conc, mbps, ips, retriesPerTile, msPerTile, action}
-    let lastEtaUpdateTs = null;
-    let lastEtaCreated = 0;
-    let ewmaRateTilesPerMs = null;
-    let uploadedBytesDone = 0;
-    let lastEtaBytesDone = 0;
-    let ewmaRateBytesPerMs = null;
-    const ETA_EWMA_ALPHA = 0.25;
-
-    const startEta = () => {
-      uploadStartTs = performance.now();
-      lastEtaUpdateTs = uploadStartTs;
-      lastEtaCreated = 0;
-      ewmaRateTilesPerMs = null;
-
-      uploadedBytesDone = 0;
-      lastEtaBytesDone = 0;
-      ewmaRateBytesPerMs = null;
-    };
-
-    const pad2 = (n) => String(n).padStart(2, "0");
-    const pad3 = (n) => String(n).padStart(3, "0");
-
-    const updateCreationProgress = () => {
-      setProgress(createdTiles, totalTiles, "Uploading to board…");
-
-      if (!uploadStartTs) {
-        setEtaText(null);
-        return;
-      }
-
-      const remainingTiles = totalTiles - createdTiles;
-      if (remainingTiles <= 0) {
-        setEtaText(null);
-        return;
-      }
-
-
-      const ETA_MIN_SAMPLES = 6;
-      if (createdTiles < ETA_MIN_SAMPLES) {
-        setEtaText(null);
-        return;
-      }
-      const now = performance.now();
-      const dt = now - (lastEtaUpdateTs || now);
-
-      // Обновляем EWMA-рейт не чаще чем раз в ~200мс и только если был прогресс.
-      const dc = createdTiles - lastEtaCreated;
-      const db = uploadedBytesDone - lastEtaBytesDone;
-
-      if (dt >= 200 && (dc > 0 || db > 0)) {
-        if (dc > 0) {
-          const instRateTiles = dc / dt; // tiles per ms
-          ewmaRateTilesPerMs =
-            ewmaRateTilesPerMs == null
-              ? instRateTiles
-              : ETA_EWMA_ALPHA * instRateTiles + (1 - ETA_EWMA_ALPHA) * ewmaRateTilesPerMs;
-        }
-
-        if (db > 0) {
-          const instRateBytes = db / dt; // bytes per ms
-          ewmaRateBytesPerMs =
-            ewmaRateBytesPerMs == null
-              ? instRateBytes
-              : ETA_EWMA_ALPHA * instRateBytes + (1 - ETA_EWMA_ALPHA) * ewmaRateBytesPerMs;
-        }
-
-        lastEtaUpdateTs = now;
-        lastEtaCreated = createdTiles;
-        lastEtaBytesDone = uploadedBytesDone;
-      }
-
-      const elapsed = now - uploadStartTs;
-      if (elapsed <= 0) {
-        setEtaText(null);
-        return;
-      }
-
-      // ETA считаем и по байтам, и по количеству тайлов. Берём более "пессимистичную" оценку — так меньше расхождение.
-      const avgBytesPerTile = createdTiles > 0 ? (uploadedBytesDone / createdTiles) : null;
-      const rateBytes = ewmaRateBytesPerMs && ewmaRateBytesPerMs > 0 ? ewmaRateBytesPerMs : null;
-
-      let etaByBytes = null;
-      if (avgBytesPerTile && rateBytes) {
-        const remainingBytes = remainingTiles * avgBytesPerTile;
-        etaByBytes = remainingBytes / rateBytes;
-      }
-
-      // Fallback: по тайлам
-      const overallRateTiles = createdTiles > 0 ? createdTiles / elapsed : 0;
-      const rateTiles =
-        ewmaRateTilesPerMs && ewmaRateTilesPerMs > 0 ? ewmaRateTilesPerMs : overallRateTiles;
-
-      if (!rateTiles || rateTiles <= 0) {
-        setEtaText(null);
-        return;
-      }
-
-      let etaByTiles = null;
-      if (rateTiles && rateTiles > 0) {
-        etaByTiles = remainingTiles / rateTiles;
-      }
-
-      let etaMs = null;
-      if (etaByBytes != null && etaByTiles != null) {
-        etaMs = Math.max(etaByBytes, etaByTiles);
-      } else {
-        etaMs = etaByBytes != null ? etaByBytes : etaByTiles;
-      }
-
-      setEtaText(etaMs);
-    };
-
-    // Stage 2/2: uploading to board
-    prepEndTs = performance.now();
-    setStage(2);
-    startEta();
-    setProgress(0, totalTiles, "Uploading to board…");
-    setEtaText(null);
-
-    const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
-
-    const createImageWithRetry = async (params) => {
-      let attempt = 0;
-      let lastErr = null;
-
-
-      const tStart = performance.now();
-      while (attempt <= CREATE_IMAGE_MAX_RETRIES) {
-        try {
-          const res = await board.createImage(params);
-          const dt = performance.now() - tStart;
-          createImageWallTimesMs.push(dt);
-          createImageWallTimeSumMs += dt;
-          createImageWallTimeCount += 1;
-          return res;
-        } catch (e) {
-          lastErr = e;
-          attempt += 1;
-          uploadRetryEvents += 1;
-
-          if (attempt > CREATE_IMAGE_MAX_RETRIES) break;
-
-          const msg = (e && e.message) ? e.message : String(e);
-          const isStackOverflow = msg.includes("Maximum call stack size exceeded");
-          const baseDelay = isStackOverflow ? Math.max(1500, CREATE_IMAGE_BASE_DELAY_MS) : CREATE_IMAGE_BASE_DELAY_MS;
-          const base = baseDelay * Math.pow(2, attempt - 1);
-          const jitter = Math.random() * 250;
-          await sleep(base + jitter);
-        }
-      }
-
-      throw lastErr;
-    };
-
-    const runWithConcurrency = async (items, worker, concurrency) => {
-      let cursor = 0;
-
-      const runners = new Array(concurrency).fill(0).map(async () => {
-        while (true) {
-          const i = cursor;
-          cursor += 1;
-          if (i >= items.length) break;
-          await worker(items[i], i);
-        }
-      });
-
-      await Promise.all(runners);
-    };
-
-
-
-const runWithAdaptiveConcurrency = async (
-  items,
-  worker,
-  initialConcurrency,
-  minConcurrency,
-  maxConcurrency
-) => {
-  // Adaptive concurrency by "file batches".
-  //
-  // Goals:
-  // - Be fast on large imports (1000+ tiles).
-  // - Avoid instability (throttling/timeouts) on weaker networks.
-  // - Auto-tune the upper bound (up to maxConcurrency) based on real throughput.
-  //
-  // Notes:
-  // - Each "item" here is a *source file*, but each file may expand into many tiles.
-  // - We react based on per-tile metrics (bytes/sec, ms/tile, retries/tile) collected over batches.
-  //
-  // Strategy (hysteresis):
-  // - Only decrease concurrency after *two* consecutive unstable batches.
-  // - Only increase concurrency after *two* consecutive stable batches.
-  // - Probe higher concurrency and keep it only if throughput improves.
-  // - Avoid "permanent caps" from a single noisy probe: require 2 bad probes at the same base level.
-
-  const isSmallRun = items.length <= 96;
-
-  let concurrency = Math.max(minConcurrency, Math.min(maxConcurrency, initialConcurrency));
-  let lockedMax = maxConcurrency;
-
-  // How much improvement we require to accept a higher concurrency.
-  const GAIN_THRESHOLD = isSmallRun ? 1.06 : 1.08; // 6% (small) / 8% (large)
-
-  const PROBE_BATCHES = 2;      // batches to evaluate a probe
-  const EWMA_ALPHA = 0.25;
-
-  // Only make stability decisions if we processed at least this many tiles in a batch.
-  const MIN_TILES_FOR_DECISION = isSmallRun ? 10 : 12;
-  // Also allow decisions when we processed enough bytes (useful when each source file == 1 tile).
-  const MIN_BYTES_FOR_DECISION = isSmallRun ? 8_000_000 : 20_000_000;
-
-  let idx = 0;
-  let tpEwmaMbps = null;
-  let probe = null; // { baseConc, baseTpMbps, batchesAtProbe }
-
-  // Hysteresis counters
-  let unstableStreak = 0;
-  let stableStreak = 0;
-
-  // Avoid oscillation: small cooldown after changes/probes.
-  let cooldownBatches = 0;
-  let reprobeCooldown = 0;
-
-  // Require 2 "bad probes" at the same base concurrency to permanently cap.
-  let badProbeCount = 0;
-  let lastBadProbeBase = null;
-
-  while (idx < items.length) {
-    maxConcurrencySeen = Math.max(maxConcurrencySeen, concurrency);
-
-    // Small batches let us react faster.
-    const batchSize = Math.min(items.length - idx, Math.max(concurrency * 2, 4));
-    const batch = items.slice(idx, idx + batchSize);
-
-    const retryBefore = uploadRetryEvents;
-    const bytesBefore = uploadedBytesDone;
-    const tilesBefore = createdTiles;
-    const t0 = performance.now();
-
-    await runWithConcurrency(batch, async (item, localI) => {
-      await worker(item, idx + localI);
-    }, concurrency);
-
-    const dtMs = performance.now() - t0;
-    const retries = uploadRetryEvents - retryBefore;
-
-    const bytesDelta = uploadedBytesDone - bytesBefore;
-    const tilesDelta = createdTiles - tilesBefore;
-
-    const dtSec = Math.max(0.001, dtMs / 1000);
-    const mbps = (bytesDelta / 1_000_000) / dtSec; // MB/sec
-    const ips = tilesDelta / dtSec;                // tiles/sec
-
-    tpEwmaMbps =
-      tpEwmaMbps == null ? mbps : EWMA_ALPHA * mbps + (1 - EWMA_ALPHA) * tpEwmaMbps;
-
-    const msPerTile = dtMs / Math.max(1, tilesDelta);
-    const retriesPerTile = retries / Math.max(1, tilesDelta);
-
-    // Backoff/stability rules.
-    // Be a bit more tolerant to avoid over-reacting (esp. on small runs).
-    const unstable = (retriesPerTile > 0.10 || msPerTile > 17000);
-    const stable = (retriesPerTile < 0.04 && msPerTile < 13000);
-
-    const enoughSignal = (tilesDelta >= MIN_TILES_FOR_DECISION) || (bytesDelta >= MIN_BYTES_FOR_DECISION);
-
-    if (cooldownBatches > 0) cooldownBatches -= 1;
-    if (reprobeCooldown > 0) reprobeCooldown -= 1;
-
-    // Update streaks only when we have enough signal.
-    if (enoughSignal) {
-      if (unstable) {
-        unstableStreak += 1;
-        stableStreak = 0;
-      } else if (stable) {
-        stableStreak += 1;
-        unstableStreak = 0;
-      } else {
-        unstableStreak = 0;
-        stableStreak = 0;
-      }
-    }
-
-    let action = "keep";
-
-    // Decrease only after 2 consecutive unstable batches.
-    if (enoughTiles && unstableStreak >= 2 && concurrency > minConcurrency) {
-      concurrency -= 1;
-      probe = null;
-      cooldownBatches = 2;
-      reprobeCooldown = 3;
-      unstableStreak = 0;
-      stableStreak = 0;
-      action = "down";
-    } else {
-      // Probe logic: attempt to increase only when stable (2 consecutive stable batches).
-      if (probe && concurrency === probe.baseConc + 1) {
-        probe.batchesAtProbe += 1;
-
-        if (probe.batchesAtProbe >= PROBE_BATCHES) {
-          const gain = tpEwmaMbps / Math.max(1e-9, probe.baseTpMbps);
-
-          if (gain < GAIN_THRESHOLD) {
-            // Not worth it: revert to base concurrency.
-            concurrency = probe.baseConc;
-
-            // Track repeated bad probes at the same base concurrency.
-            if (lastBadProbeBase === probe.baseConc) badProbeCount += 1;
-            else {
-              lastBadProbeBase = probe.baseConc;
-              badProbeCount = 1;
-            }
-
-            // Only permanently cap after 2 bad probes at the same level.
-            if (badProbeCount >= 2) {
-              lockedMax = probe.baseConc;
-              action = "cap";
-            } else {
-              action = "revert";
-            }
-
-            probe = null;
-            cooldownBatches = 2;
-            reprobeCooldown = 3;
-            stableStreak = 0;
-            unstableStreak = 0;
-          } else {
-            // Worth it: accept higher concurrency as new base.
-            probe = null;
-            cooldownBatches = 2;
-            stableStreak = 0;
-            unstableStreak = 0;
-            badProbeCount = 0;
-            lastBadProbeBase = null;
-            action = "accept";
-          }
-        }
-      } else if (
-        !probe &&
-        cooldownBatches === 0 &&
-        reprobeCooldown === 0 &&
-        concurrency < lockedMax &&
-        (
-          // Prefer stability; if we don't have enoughSignal, avoid changing.
-          (enoughSignal && stableStreak >= 2) ||
-          // If we don't have enoughSignal yet (very small / early batches),
-          // allow one gentle probe on small runs.
-          (!enoughSignal && isSmallRun && idx === 0 && concurrency < lockedMax)
-        )
-      ) {
-        // Start a probe: remember throughput at current concurrency, then increase by 1.
-        probe = { baseConc: concurrency, baseTpMbps: tpEwmaMbps ?? mbps, batchesAtProbe: 0 };
-        concurrency += 1;
-        action = "up";
-        cooldownBatches = 2;
-        stableStreak = 0;
-        unstableStreak = 0;
-      }
-    }
-
-    concurrencyDecisions.push({
-      idx,
-      conc: concurrency,
-      lockedMax,
-      mbps: Number.isFinite(mbps) ? Number(mbps.toFixed(2)) : null,
-      ips: Number.isFinite(ips) ? Number(ips.toFixed(2)) : null,
-      retriesPerTile: Number.isFinite(retriesPerTile) ? Number(retriesPerTile.toFixed(3)) : null,
-      msPerTile: Number.isFinite(msPerTile) ? Math.round(msPerTile) : null,
-      action,
-    });
-
-    idx += batch.length;
-  }
-};
-;
-;
-
-    const processOneInfo = async (info, i) => {
-      const { file, needsSlice, width, height, tilesX, tilesY } = info;
-
-      let center;
-      if (slotCentersByFile) {
-        center = slotCentersByFile.get(file) || { x: viewCenterX, y: viewCenterY };
-      } else if (slotCentersArray) {
-        center = slotCentersArray[i] || { x: viewCenterX, y: viewCenterY };
-      } else {
-        center = { x: viewCenterX, y: viewCenterY };
-      }
-
-      const originalName = file.name || "image";
-      const nameMatch = originalName.match(/^(.*?)(\.[^.]*$|$)/);
-      const baseName = nameMatch ? nameMatch[1] : originalName;
-      const originalExt = nameMatch && nameMatch[2] ? nameMatch[2] : "";
-
-      // Грузим изображение из локального object URL (без base64 в памяти)
-      const objectUrl = URL.createObjectURL(file);
-      let imgEl;
-      try {
-        imgEl = await loadImage(objectUrl);
-      } finally {
-        URL.revokeObjectURL(objectUrl);
-      }
-
-      // Локальный canvas на воркер (не общий), чтобы можно было безопасно параллелить по файлам.
-      const canvas = document.createElement("canvas");
-      const ctx = canvas.getContext("2d");
-
-      const makeFullImageDataUrl = () => {
-        canvas.width = width;
-        canvas.height = height;
-        ctx.clearRect(0, 0, width, height);
-        ctx.drawImage(imgEl, 0, 0, width, height);
-        return canvasToDataUrlUnderLimit(canvas, TARGET_URL_BYTES);
-      };
-
-      if (!needsSlice) {
-        const title = `C${pad2(info.satCode)}/${pad3(info.briCode)} ${originalName}`;
-
-        const urlToUse = makeFullImageDataUrl();
-
-        const t0 = performance.now();
-        const imgWidget = await createImageWithRetry({
-          url: urlToUse,
-          x: center.x,
-          y: center.y,
-          title,
+async function __stepOnce(dir){
+  try{
+    if(!haveMetadata) return;
+    const hasRVFC = !!(video && video.requestVideoFrameCallback);
+    try{ allowPlay=false; video.pause(); }catch(_){}
+
+    if(hasRVFC){
+      const start = video.currentTime || 0;
+      const fps = Math.max(1, getFPS() || 30);
+      const dt = 1 / fps;
+      const nudge = dir>0 ? +1e-4 : -1e-4;
+      let target = clampTime(start + dir*dt);
+      for(let i=0;i<6;i++){
+        const pts = await new Promise((resolve)=>{
+          let handle = 0; let to = 0;
+          const cb = (now, meta)=>{
+            if(to) clearTimeout(to);
+            try{ if(handle && video.cancelVideoFrameCallback) video.cancelVideoFrameCallback(handle); }catch(_){}
+            const p = (meta && typeof meta.mediaTime==='number') ? meta.mediaTime : (video.currentTime||0);
+            resolve(p);
+          };
+          try{ handle = video.requestVideoFrameCallback(cb); }catch(_){ resolve(video.currentTime||start); }
+          try{ video.currentTime = clampTime(target + nudge); }catch(_){}
+          to = setTimeout(()=>{ resolve(video.currentTime||start); }, 220);
         });
-        const t1 = performance.now();
-
-        try {
-          await imgWidget.setMetadata(META_APP_ID, {
-            fileName: originalName,
-            satCode: info.satCode,
-            briCode: info.briCode,
-          });
-        } catch (e) {
-          console.warn("setMetadata failed (small image):", e);
+        if(Number.isFinite(pts) && ((dir>0 && pts > start+1e-6) || (dir<0 && pts < start-1e-6))){
+          if(videoTex) videoTex.needsUpdate = true;
+          updateUI(true); __renderOnce();
+          return;
         }
-
-        allCreatedTiles.push(imgWidget);
-        uploadedBytesDone += (urlToUse ? urlToUse.length : 0);
-        createdTiles += 1;
-        updateCreationProgress();
-
-        return;
+        // not advanced yet — push target a bit further
+        target = clampTime(target + dir * Math.max(dt*0.25, 0.002));
       }
-
-      // ---- slice case ----
-
-      const colWidths = [];
-      const rowHeights = [];
-
-      for (let tx = 0; tx < tilesX; tx++) {
-        const w = Math.min(SLICE_TILE_SIZE, width - tx * SLICE_TILE_SIZE);
-        colWidths.push(w);
-      }
-      for (let ty = 0; ty < tilesY; ty++) {
-        const h = Math.min(SLICE_TILE_SIZE, height - ty * SLICE_TILE_SIZE);
-        rowHeights.push(h);
-      }
-
-      const mosaicW = colWidths.reduce((sum, w) => sum + w, 0);
-      const mosaicH = rowHeights.reduce((sum, h) => sum + h, 0);
-
-      const mosaicLeft = center.x - mosaicW / 2;
-      const mosaicTop = center.y - mosaicH / 2;
-
-      const colPrefix = [0];
-      for (let tx = 1; tx < tilesX; tx++) {
-        colPrefix[tx] = colPrefix[tx - 1] + colWidths[tx - 1];
-      }
-      const rowPrefix = [0];
-      for (let ty = 1; ty < tilesY; ty++) {
-        rowPrefix[ty] = rowPrefix[ty - 1] + rowHeights[ty - 1];
-      }
-
-      let tileIndexForName = 0;
-
-      for (let ty = 0; ty < tilesY; ty++) {
-        for (let tx = 0; tx < tilesX; tx++) {
-          const sx = tx * SLICE_TILE_SIZE;
-          const sy = ty * SLICE_TILE_SIZE;
-          const sw = colWidths[tx];
-          const sh = rowHeights[ty];
-
-          canvas.width = sw;
-          canvas.height = sh;
-          ctx.clearRect(0, 0, sw, sh);
-          ctx.drawImage(imgEl, sx, sy, sw, sh, 0, 0, sw, sh);
-
-          // Всегда возвращаем dataURL (не пропускаем тайлы) — при необходимости функция сжатия
-          // опустит качество ниже 0.8, чтобы уложиться в лимиты.
-          const tileDataUrl = canvasToDataUrlUnderLimit(canvas, TARGET_URL_BYTES);
-
-          const tileLeft = mosaicLeft + colPrefix[tx];
-          const tileTop = mosaicTop + rowPrefix[ty];
-          const centerX = tileLeft + sw / 2;
-          const centerY = tileTop + sh / 2;
-
-          tileIndexForName += 1;
-          const tileSuffix = pad2(tileIndexForName); // 01, 02, 03...
-          const tileBaseName = `${baseName}_${tileSuffix}`;
-          const tileFullName = originalExt ? `${tileBaseName}${originalExt}` : tileBaseName;
-
-          const title = `C${pad2(info.satCode)}/${pad3(info.briCode)} ${tileFullName}`;
-
-          const t0 = performance.now();
-          const tileWidget = await createImageWithRetry({
-            url: tileDataUrl,
-            x: centerX,
-            y: centerY,
-            title,
-          });
-          const t1 = performance.now();
-
-          try {
-            await tileWidget.setMetadata(META_APP_ID, {
-              fileName: originalName,
-              satCode: info.satCode,
-              briCode: info.briCode,
-              tileIndex: tileIndexForName,
-              tilesX,
-              tilesY,
-            });
-          } catch (e) {
-            console.warn("setMetadata failed (tile):", e);
-          }
-
-          allCreatedTiles.push(tileWidget);
-          uploadedBytesDone += (tileDataUrl ? tileDataUrl.length : 0);
-          createdTiles += 1;
-          updateCreationProgress();
-        }
-      }
-
-      try { imgEl.src = ""; } catch (e) {}
-    };
-
-    // Upload stage concurrency:
-// - starts at 4 for large imports, then adapts down/up between 2..4 based on retries/latency
-const initialConcurrency = totalTiles >= 128 ? UPLOAD_CONCURRENCY_INITIAL_LARGE : Math.min(4, UPLOAD_CONCURRENCY_MAX);
-const minConcurrency = UPLOAD_CONCURRENCY_MIN;
-const maxConcurrency = UPLOAD_CONCURRENCY_MAX;
-
-await runWithAdaptiveConcurrency(orderedInfos, processOneInfo, initialConcurrency, minConcurrency, maxConcurrency);
-setProgress(totalTiles, totalTiles);
-    if (setProgress.flush) setProgress.flush();
-    setEtaText(null);
-    if (setEtaText.flush) setEtaText.flush();
-
-    if (allCreatedTiles.length) {
-      try {
-        await board.viewport.zoomTo(allCreatedTiles);
-      } catch (e) {
-        console.warn("zoomTo failed in Stitch/Slice:", e);
-      }
+      // fallback: grid step
+      const snapped = Math.round(start*fps)/fps;
+      const next = clampTime(snapped + dir*dt);
+      video.currentTime = next;
+      if(videoTex) videoTex.needsUpdate = true;
+      updateUI(true); __renderOnce();
+      return;
     }
 
-
-    // Mark end of upload stage for stats/ETA
-    uploadEndTs = performance.now();
-
-    // ---- console stats (console only) ----
-    try {
-      const fmtMs = (ms) => {
-        if (ms == null || !Number.isFinite(ms) || ms < 0) return null;
-        const s = Math.round(ms / 1000);
-        const mins = Math.floor(s / 60);
-        const secs = s % 60;
-        const secsStr = String(secs).padStart(2, "0");
-        return mins ? `${mins}m ${secsStr}s` : `${secsStr}s`;
-      };
-
-
-      const fmtSec = (ms) => {
-        if (ms == null || !Number.isFinite(ms) || ms < 0) return null;
-        return `${(ms / 1000).toFixed(2)}s`;
-      };
-
-      const percentile = (arr, p) => {
-        if (!arr || !arr.length) return null;
-        const xs = arr.slice().sort((a, b) => a - b);
-        const idx = Math.min(xs.length - 1, Math.max(0, Math.round((xs.length - 1) * p)));
-        return Math.round(xs[idx]);
-      };
-
-      const prepEnd = (prepEndTs != null ? prepEndTs : (uploadStartTs != null ? uploadStartTs : uploadEndTs));
-      const prepMs = prepStartTs != null && prepEnd != null ? prepEnd - prepStartTs : null;
-      const uploadMs = uploadStartTs != null && uploadEndTs != null ? uploadEndTs - uploadStartTs : null;
-      const totalEnd = (uploadEndTs != null ? uploadEndTs : performance.now());
-      const totalMs = prepStartTs != null ? totalEnd - prepStartTs : null;
-
-      const totalMB = uploadedBytesDone / 1_000_000;
-      const avgMBPerTile = createdTiles ? totalMB / createdTiles : 0;
-      const mbps = uploadMs ? totalMB / (uploadMs / 1000) : null;
-
-      const avgCreateMs = createImageWallTimeCount
-        ? Math.round(createImageWallTimeSumMs / createImageWallTimeCount)
-        : null;
-
-      console.groupCollapsed("[Image Align Tool] Import stats");
-      console.log(`Files (sources): ${fileInfos.length}`);
-      console.log(`Tiles: ${createdTiles}/${totalTiles}`);
-      console.log(`Time: preparing ${fmtMs(prepMs)}, uploading ${fmtMs(uploadMs)}, total ${fmtMs(totalMs)}`);
-      console.log("Upload:", {
-        totalMB: Math.round(totalMB * 10) / 10,
-        avgMBPerTile: Math.round(avgMBPerTile * 100) / 100,
-        mbps: mbps != null ? Math.round(mbps * 100) / 100 : null,
-        retries: uploadRetryEvents,
-      });
-
-      const p50Ms = percentile(createImageWallTimesMs, 0.5);
-      const p95Ms = percentile(createImageWallTimesMs, 0.95);
-      const wallHuman = avgCreateMs != null
-        ? `${fmtSec(avgCreateMs)} avg (p50 ${fmtSec(p50Ms)}, p95 ${fmtSec(p95Ms)})`
-        : null;
-
-      console.log("createImage wall-time:", wallHuman);
-      console.log("createImage wall-time (ms):", { avg: avgCreateMs, p50: p50Ms, p95: p95Ms });
-      console.log("Concurrency:", {
-        maxSeen: maxConcurrencySeen,
-        configuredMax: UPLOAD_CONCURRENCY_MAX,
-      });
-
-      if (concurrencyDecisions.length) {
-        const rows = concurrencyDecisions.slice(-12).map((d) => ({
-          idx: d.idx,
-          conc: d.conc,
-          lockedMax: d.lockedMax,
-          mbps: d.mbps,
-          ips: d.ips,
-          retriesPerTile: d.retriesPerTile,
-          msPerTile: d.msPerTile,
-          action: d.action,
-        }));
-        console.table(rows);
-      }
-      console.groupEnd();
-    } catch (e) {
-      console.warn("[Image Align Tool] stats failed:", e);
+    // Fallback for browsers without rVFC: previous grid-based approach
+    const fps = getFPS();
+    if(!fps || !isFinite(fps) || fps<=0) return;
+    const dur = video.duration || 0;
+    const t0 = video.currentTime || 0;
+    const dt = 1 / fps;
+    const snapped = Math.round(t0 * fps) / fps;
+    let next = snapped + (dir*dt);
+    if (next < 0) next = 0;
+    if (dur) {
+      const tail = dur - dt * 0.25;
+      if (next > tail) next = Math.min(dur, tail);
     }
-
-    await board.notifications.showInfo(
-      `Imported ${fileInfos.length} source image${
-        fileInfos.length === 1 ? "" : "s"
-      } into ${totalTiles} tile${totalTiles === 1 ? "" : "s"}.`
-    );
-  } catch (err) {
-    console.error(err);
-    setProgress(0, 0, "Error");
-    setEtaText(null);
-    await board.notifications.showError(
-      "Something went wrong while importing images. Please check the console."
-    );
-  } finally {
-    const stitchButton = document.getElementById("stitchButton");
-    if (stitchButton) stitchButton.disabled = false;
-  }
+    if (typeof queueSeek === 'function') queueSeek(next);
+    else video.currentTime = next;
+    updateUI(true); __renderOnce();
+  }catch(_){}
 }
 
-// ---------- init ----------
+stepBackBtn.addEventListener('click', ()=> stepFrames(-1));
+  stepFwdBtn.addEventListener('click', ()=> stepFrames(+1));
 
-window.addEventListener("DOMContentLoaded", () => {
-  detectMaxSliceDim();
+  // === Wheel zoom (FOV) + slider ===
+const WHEEL_STEP = 3;
+// Default FOV depends on mode (flat uses two wheel ticks closer)
+function defaultFOV(){ try{ return (renderMode==='flat') ? (80 - 2*WHEEL_STEP) : 80; }catch(_){ return 80; } }
 
-  const sortingForm = document.getElementById("sorting-form");
-  if (sortingForm) sortingForm.addEventListener("submit", handleSortingSubmit);
+  const applyFOV=f=>{ f=Math.min(100,Math.max(20,f)); camera.fov=f; camera.updateProjectionMatrix(); zoomSlider.value = String(Math.round(ZSUM - f)); fitPlane(); }
+  on(zoomSlider,'input',()=>applyFOV(ZSUM - parseFloat(zoomSlider.value)));
+  on(viewer,'wheel',e=>{ e.preventDefault(); const step=3; applyFOV(camera.fov + (e.deltaY>0?step:-step)); }, {passive:false});
+  on(resetViewBtn,'click',()=>{ controls.reset(); applyFOV(defaultFOV()); panX=0; panY=0; if(uvMesh) uvMesh.rotation.set(0,-Math.PI/2,0); fitPlane(); });
 
-  const stitchForm = document.getElementById("stitch-form");
-  if (stitchForm) stitchForm.addEventListener("submit", handleStitchSubmit);
+  // === Drag & Drop and file dialog ===
 
-  const tabButtons = document.querySelectorAll(".tab-btn");
-  const tabContents = {
-    sorting: document.getElementById("tab-sorting"),
-    stitch: document.getElementById("tab-stitch"),
-  };
-
-  function activateTab(name) {
-    tabButtons.forEach((btn) => {
-      const isActive = btn.dataset.tab === name;
-      btn.classList.toggle("active", isActive);
-    });
-
-    Object.entries(tabContents).forEach(([key, el]) => {
-      if (!el) return;
-      el.classList.toggle("active", key === name);
-    });
+// Ensure overlays accept drops (prevents files=0 when overlay on top)
+try{
+  if (typeof introBackdrop!=='undefined' && introBackdrop) {
+    on(introBackdrop,'dragover', e=>{ e.preventDefault(); e.stopPropagation(); if(e.dataTransfer) e.dataTransfer.dropEffect='copy'; }, {passive:false});
+    on(introBackdrop,'drop', e=>{ e.preventDefault(); e.stopPropagation(); const fl=e.dataTransfer?.files; if(fl?.length) addFiles(fl); }, {passive:false});
   }
-
-  if (tabButtons.length) {
-    tabButtons.forEach((btn) => {
-      btn.addEventListener("click", () => activateTab(btn.dataset.tab));
-    });
-    // дефолт — Stitch/Slice
-    activateTab("stitch");
+  if (typeof dropmask!=='undefined' && dropmask && !dropmask.__dndRebind){
+    on(dropmask,'dragover', e=>{ e.preventDefault(); e.stopPropagation(); if(e.dataTransfer) e.dataTransfer.dropEffect='copy'; }, {passive:false});
+    on(dropmask,'drop', e=>{ e.preventDefault(); e.stopPropagation(); const fl=e.dataTransfer?.files; if(fl?.length) addFiles(fl); }, {passive:false});
+    dropmask.__dndRebind = true;
   }
+}catch(_){}
+  on(status,'dragover', e=>{ e.preventDefault(); });
 
-  const fileButton = document.getElementById("stitchFileButton");
-  const fileInput = document.getElementById("stitchFolderInput");
-  const fileLabel = document.getElementById("stitchFileLabel");
+  // Accept drops on overlays to avoid misses when they cover the viewer
+  try{
+    if (typeof status!=='undefined' && status) {
+      on(status,'drop', e=>{ e.preventDefault(); e.stopPropagation(); const fl=e.dataTransfer?.files; if(fl?.length) addFiles(fl); });
+    }
+    if (typeof dropmask!=='undefined' && dropmask) {
+    }
+  }catch(_){}
 
-  if (fileButton && fileInput && fileLabel) {
-    fileButton.addEventListener("click", () => fileInput.click());
+  // Global drag highlight: keep dropmask working even after clearAll / overlays
+  (function(){
+    let dragDepth = 0;
+    function showMask(){ try{ dropmask && dropmask.classList.add('show'); }catch(_){ } }
+    function hideMask(){ try{ dropmask && dropmask.classList.remove('show'); }catch(_){ } }
+    ['dragenter','dragover','dragleave','drop'].forEach(type=>{
+      document.addEventListener(type, e=>{
+        try{
+          const dt = e.dataTransfer;
+          // React only when real files are being dragged
+          if(dt && dt.types && !Array.from(dt.types).includes('Files')) return;
+          if(type==='dragenter'){
+            e.preventDefault();
+            dragDepth++;
+            showMask();
+          }else if(type==='dragover'){
+            e.preventDefault();
+            if(dt) dt.dropEffect = 'copy';
+          }else if(type==='dragleave'){
+            e.preventDefault();
+            dragDepth = Math.max(0, dragDepth-1);
+            if(dragDepth===0) hideMask();
+          }else{ // drop
+            e.preventDefault();
+            dragDepth = 0;
+            hideMask();
+          }
+        }catch(_){}
+      }, {capture:true, passive:false});
+    });
+  })();
 
-    const updateLabel = () => {
-      const files = fileInput.files;
-      if (!files || files.length === 0) {
-        fileLabel.textContent = "No files selected";
-      } else if (files.length === 1) {
-        fileLabel.textContent = files[0].name;
-      } else {
-        fileLabel.textContent = `${files.length} files selected`;
+  // Accept drops on the viewer background (when overlays don't already handle it)
+  on(viewer,'drop', e=>{
+    e.preventDefault();
+    const fl = e.dataTransfer?.files;
+    if (fl?.length) addFiles(fl);
+  });
+
+on(fileInput,'change',()=>{ if(fileInput.files?.length) addFiles(fileInput.files); 
+  try{ fileInput.value=''; }catch(_){ }});
+
+  // === Keyboard ===
+  window.addEventListener('keydown', (e)=>{
+    const k = e.code;
+    if(k==='Space'){ e.preventDefault(); playBtn.click(); }
+    else if(k==='ArrowRight' || k==='KeyD'){ e.preventDefault(); stepFrames(+1); }
+    else if(k==='ArrowLeft' || k==='KeyA'){ e.preventDefault(); stepFrames(-1); }
+    else if(k==='ArrowUp' || k==='KeyW'){ e.preventDefault(); nav(-1); }
+    else if(k==='ArrowDown' || k==='KeyS'){ e.preventDefault(); nav(1); }
+    else if(k==='KeyR'){ e.preventDefault(); resetViewBtn.click(); }
+    else if(k==='KeyE'){ e.preventDefault(); try{ togglePlistPanel(); }catch(_){ } }
+    else if(k==='KeyI'){ e.preventDefault(); try{ infoBtn.click(); }catch(_){ } }
+    else if(k==='KeyO'){ e.preventDefault(); try{ fileInput.click(); }catch(_){ } }
+
+    else if(k==='KeyE'){ e.preventDefault(); try{ togglePlistPanel(); }catch(_){ } }
+    else if(k==='KeyI'){ e.preventDefault(); try{ infoBtn.click(); }catch(_){ } }
+    else if(k==='KeyQ'){ e.preventDefault(); try{ clearAll(); }catch(_){ } }
+    else if(k==='Escape'){ e.preventDefault(); try{ closePlistPanel(); }catch(_){ } try{ closeInfoPanel(); }catch(_){ } }
+  });
+
+  // Left-click toggles play/pause (click, not drag)
+  let clickSingleTimer = null;
+  let tapX=0,tapY=0,tapT=0,tapMoved=false;
+
+  function inLeftUiCluster(e){
+    try{
+      const v = viewer;
+      if(!v) return false;
+      if (v.classList && v.classList.contains('ui-autoHide')) return false;
+
+      const hudEl  = document.getElementById('hud')       || window.hud;
+      const dockEl = document.getElementById('plistDock') || window.plistDock;
+      const rects = [];
+      if (hudEl)  rects.push(hudEl.getBoundingClientRect());
+      if (dockEl) rects.push(dockEl.getBoundingClientRect());
+      if (!rects.length) return false;
+
+      let left=rects[0].left, top=rects[0].top,
+          right=rects[0].right, bottom=rects[0].bottom;
+      for (let i=1;i<rects.length;i++){
+        const r = rects[i]; if(!r) continue;
+        if (r.left   < left)   left   = r.left;
+        if (r.top    < top)    top    = r.top;
+        if (r.right  > right)  right  = r.right;
+        if (r.bottom > bottom) bottom = r.bottom;
       }
-    };
 
-    fileInput.addEventListener("change", updateLabel);
-    updateLabel();
+      const x = e.clientX, y = e.clientY;
+      return x >= left && x <= right && y >= top && y <= bottom;
+    }catch(_){
+      return false;
+    }
   }
+
+  on(viewer,'pointerdown', e=>{
+    if (inLeftUiCluster(e)) return;
+    if (e.target && e.target.closest &&
+        (e.target.closest('#toolbar') ||
+         e.target.closest('#fsBar') ||
+         e.target.closest('#plistDock') ||
+         e.target.closest('#infoBtn') ||
+         e.target.closest('#plistBtn'))) return;
+    if(e.button!==0) return;
+    tapX=e.clientX; tapY=e.clientY; tapT=performance.now(); tapMoved=false;
+  });
+
+  on(viewer,'pointermove', e=>{
+    if((e.buttons&1)===1 && (Math.abs(e.clientX-tapX)>5 || Math.abs(e.clientY-tapY)>5))
+      tapMoved=true;
+  });
+
+  on(viewer,'pointerup', e=>{
+    if (inLeftUiCluster(e)) return;
+    if (e.target && e.target.closest &&
+        (e.target.closest('#toolbar') ||
+         e.target.closest('#fsBar') ||
+         e.target.closest('#plistDock') ||
+         e.target.closest('#infoBtn') ||
+         e.target.closest('#plistBtn'))) return;
+    if (status && status.classList && status.classList.contains('show')) return;
+    if(e.button!==0) return;
+    const dt=performance.now()-tapT;
+    if(!tapMoved && dt<250){
+      if(clickSingleTimer) clearTimeout(clickSingleTimer);
+      clickSingleTimer = setTimeout(()=>{ try{ togglePlay(); }catch(_){ } }, 200);
+    }
+  });
+
+  // === Fullscreen (cross‑browser) ===
+  function isFullscreen(){ return document.fullscreenElement || document.webkitFullscreenElement || document.msFullscreenElement || document.mozFullScreenElement; }
+  async function enterFullscreen(){ const el = viewer; const req = el.requestFullscreen || el.webkitRequestFullscreen || el.msRequestFullscreen || el.mozRequestFullScreen; if(req) { try{ await req.call(el); }catch(e){} } }
+  async function exitFullscreen(){ const ex = document.exitFullscreen || document.webkitExitFullscreen || document.msExitFullscreen || document.mozCancelFullScreen; if(ex){ try{ await ex.call(document); }catch(e){} } }
+  async function toggleFullscreen(){ if(!isFullscreen()){ await enterFullscreen(); } else { await exitFullscreen(); } }
+  on(fsBtn,'click',toggleFullscreen); on(viewer,'dblclick', (e)=>{
+    if (e.target && e.target.closest && (e.target.closest('#toolbar') || e.target.closest('#fsBar') || e.target.closest('#plistDock') || e.target.closest('#infoBtn') || e.target.closest('#plistBtn'))) { return; } if(clickSingleTimer){ clearTimeout(clickSingleTimer); clickSingleTimer=null; } toggleFullscreen(); });
+  on(document,'fullscreenchange webkitfullscreenchange msfullscreenchange mozfullscreenchange', ()=>{
+  fsBar.classList.add('show');
+  const fs = !!isFullscreen();
+  try{ relocatePanelsForFS(fs); }catch(_){}
+  try{
+    if (window.__panelState){
+      if (window.__panelState.plist && !plistPanel.classList.contains('show')) openPlistPanel();
+      if (window.__panelState.info  && !infoPanel.classList.contains('show')) infoPanel.classList.add('show');
+      positionInfoPanel();
+    }
+  }catch(_){}
+  onResize();
 });
+
+function openInfoPanel(){ try{ infoPanel.classList.add('show'); positionInfoPanel(); }catch(_){}}
+function closeInfoPanel(){ try{ infoPanel.classList.remove('show'); }catch(_){}}
+// === Info panel toggle ===
+  on(infoBtn,'click',()=>{ try{ if (typeof isFullscreen==='function' && isFullscreen()) __relocateInfoForFS(true); }catch(_){ } positionInfoPanel(); infoPanel.classList.toggle('show'); try{ window.__panelState = window.__panelState || {}; window.__panelState.info = infoPanel.classList.contains('show'); }catch(_){ } });
+
+  // === Resize ===
+  function onResize(){ const fs=!!isFullscreen(); const w=fs?window.innerWidth:viewer.clientWidth; const h=fs?window.innerHeight:viewer.clientHeight; renderer.setSize(w,h,true); camera.aspect=w/h; camera.updateProjectionMatrix(); fitPlane(); }
+  on(window,'resize',()=>{ onResize(); positionInfoPanel(); if(plistPanel.classList.contains('show')) { const r = plistBtn.getBoundingClientRect(); plistPanel.style.top = Math.round(r.top) + 'px'; } });
+  onResize();
+  infoPanel.style.top = overlayTopPx() + 'px';
+
+  // === Init ===
+  updateUI(true);
+
+  // === FPS from metadata (mp4/webm) ===
+  function setDisplayFPSOnce(val){
+    if(displayFPS) return;
+    if(typeof val==='number' && isFinite(val) && val>0 && val<1000){
+      sourceFPS = val;
+      displayFPS = val;
+      updateHUD();
+    }
+  
+  try{ Bus.emit && Bus.emit('fps:set', val); }catch(_){}
+}
+  function loadScriptOnce(src){
+    return new Promise((resolve,reject)=>{ const s=document.createElement('script'); s.src=src; s.async=true; s.onload=()=>resolve(); s.onerror=()=>reject(new Error('load '+src)); document.head.appendChild(s); });
+  }
+  async function ensureMP4Box(){ if(window.MP4Box) return; await loadScriptOnce('https://unpkg.com/mp4box@0.5.4/dist/mp4box.all.min.js'); }
+  async function extractMP4FPS(file){ try{ await ensureMP4Box(); const buf = await file.arrayBuffer(); const mp4 = window.MP4Box.createFile(); return await new Promise((resolve)=>{ mp4.onReady = (info)=>{ let v = (info.videoTracks && info.videoTracks[0]) || (info.tracks||[]).find(t=>t.type==='video'); if(v && v.nb_samples && v.duration && v.timescale){ const fps = (v.nb_samples * v.timescale) / v.duration; resolve(fps); } else resolve(null); }; mp4.onError = ()=>resolve(null); buf.fileStart = 0; mp4.appendBuffer(buf); mp4.flush(); }); }catch(e){ return null; } }
+  function readVint(u, pos){ const b=u[pos]; if(b===undefined) return {length:0,value:0}; let mask=0x80, len=1; while(len<=8 && (b & mask)===0){ mask>>=1; len++; } if(len>8) return {length:1,value:0}; let value = BigInt(b & (~mask)); for(let k=1;k<len;k++){ value = (value<<8n) | BigInt(u[pos+k]||0); } return {length:len, value:Number(value)}; }
+
+  async function extractWEBMFPS(file){ try{ const buf = await file.slice(0, 1024*1024).arrayBuffer(); const u=new Uint8Array(buf); for(let i=0;i<u.length-3;i++){ // DefaultDuration ID 0x23E383
+      if(u[i]===0x23 && u[i+1]===0xE3 && u[i+2]===0x83){ let idx=i+3; const r=readVint(u, idx); const sizeLen=r.length, dataLen=r.value; if(!sizeLen||!dataLen) continue; idx+=sizeLen; if(idx+dataLen<=u.length){ let ns=0; for(let j=0;j<dataLen;j++){ ns = (ns<<8) | u[idx+j]; } if(ns>0){ const fps = 1e9 / ns; return fps; } } } } return null; }catch(e){ return null; } }
+
+  async function initFPSFromMetadata(file){ try{ if(!file) return; const type=(file.type||'').toLowerCase(); let fps=null; if(type.includes('mp4')){ fps = await extractMP4FPS(file); } else if(type.includes('webm')){ fps = await extractWEBMFPS(file); } setDisplayFPSOnce(fps); } catch(e){} }
+  // Flat-mode panning with mouse (LMB drag)
+  let panActive=false, panLX=0, panLY=0;
+  on(viewer,'pointerdown', e=>{ if(renderMode!=='flat' || e.button!==0) return; panActive=true; panLX=e.clientX; panLY=e.clientY; viewer.setPointerCapture?.(e.pointerId); e.preventDefault(); });
+  on(viewer,'pointermove', e=>{ if(!panActive || renderMode!=='flat') return; const w=renderer.domElement.clientWidth||1, h=renderer.domElement.clientHeight||1; const d=1; const vh=2*d*Math.tan(camera.fov*Math.PI/360); const vw=vh*camera.aspect; const dx=(e.clientX-panLX)/w*vw; const dy=(e.clientY-panLY)/h*vh; panX+=dx; panY-=dy; panLX=e.clientX; panLY=e.clientY; plane.position.set(panX,panY,-d); });
+  on(viewer,'pointerup pointercancel', e=>{ if(e.button===0) panActive=false; });
+
+// ===== SECTION: MEDIA ADAPTERS (scaffold only; not used at runtime) =====
+
+/**
+ * @typedef {Object} MediaAdapter
+ * @property {() => Promise<void>} load
+ * @property {() => void} play
+ * @property {() => void} pause
+ * @property {() => void} dispose
+ * @property {() => number} duration
+ * @property {(t:number) => void} seek
+ */
+
+/** Image adapter scaffold */
+function createImageAdapter(file){
+  /** @type {MediaAdapter} */
+  const api = {
+    async load(){ /* TODO: decode image; noop scaffold */ },
+    play(){ /* no-op for image */ },
+    pause(){ /* no-op for image */ },
+    dispose(){ /* no-op */ },
+    duration(){ return 0 },
+    seek(t){ /* no-op for image */ }
+  };
+  return api;
+}
+
+/** Sequence adapter scaffold (folder or numbered frames) */
+function createSequenceAdapter(files){
+  /** @type {MediaAdapter} */
+  const api = {
+    async load(){ /* TODO: preload/stream frames; noop scaffold */ },
+    play(){ /* TODO */ },
+    pause(){ /* TODO */ },
+    dispose(){ /* TODO */ },
+    duration(){ return 0 },
+    seek(t){ /* TODO */ }
+  };
+  return api;
+}
+
+/** Audio adapter scaffold */
+function createAudioAdapter(file){
+  /** @type {MediaAdapter} */
+  const api = {
+    async load(){ /* TODO: setup <audio> or WebAudio; noop scaffold */ },
+    play(){ /* TODO */ },
+    pause(){ /* TODO */ },
+    dispose(){ /* TODO */ },
+    duration(){ return 0 },
+    seek(t){ /* TODO */ }
+  };
+  return api;
+}
+
+// ===== SECTION: RENDER MODES (interface + placeholders; not used at runtime) =====
+
+/**
+ * @typedef {Object} RenderMode
+ * @property {() => void} enter
+ * @property {() => void} exit
+ * @property {(fov:number) => void} applyZoom
+ * @property {() => void} render
+ * @property {(w:number,h:number) => void} resize
+ */
+
+/** Flat render mode placeholder */
+function FlatMode(){
+  /** @type {RenderMode} */
+  const api = {
+    enter(){ /* TODO: attach flat pipeline */ },
+    exit(){ /* TODO: detach */ },
+    applyZoom(fov){ /* TODO: adjust camera for flat */ },
+    render(){ /* TODO: draw frame */ },
+    resize(w,h){ /* TODO: handle size */ }
+  };
+  return api;
+}
+
+/** VR render mode placeholder */
+function VRMode(){
+  /** @type {RenderMode} */
+  const api = {
+    enter(){ /* TODO: setup VR pipeline */ },
+    exit(){ /* TODO */ },
+    applyZoom(fov){ /* TODO: adjust camera for VR */ },
+    render(){ /* TODO */ },
+    resize(w,h){ /* TODO */ }
+  };
+  return api;
+}
+
+// ===== SECTION: OPTIMIZED RESIZE (rAF-throttled) =====
+(function(){
+  let scheduled = false;
+  function dispatchOptimizedResize(){
+    scheduled = false;
+    try{ document.dispatchEvent(new Event('optimizedResize')); }catch(_){}
+  }
+  try{
+    window.addEventListener('resize', function(){
+      if (scheduled) return;
+      scheduled = true;
+      try{ requestAnimationFrame(dispatchOptimizedResize); }catch(_){ scheduled = false; }
+    }, {passive: true});
+  }catch(_){ /* older browsers fallback */ 
+    window.addEventListener('resize', function(){
+      if (scheduled) return;
+      scheduled = true;
+      setTimeout(dispatchOptimizedResize, 16);
+    });
+  }
+  // Safe unified handler: adapt layout on resize without touching existing listeners
+  document.addEventListener('optimizedResize', function(){
+    try{ if (typeof fitPlane==='function') fitPlane(); }catch(_){}
+    try{ if (typeof updateUI==='function') updateUI(true); }catch(_){}
+  });
+})();
+// ===== /OPTIMIZED RESIZE =====
+
+// === Central click-to-open (safe, idempotent) ===
+(function(){
+  try{
+    if (typeof status!=='undefined' && status) {
+      if (!status.__hasClickToOpen) {
+        status.addEventListener('click', function(e){
+          if (!status.classList.contains('show')) return;
+          e.preventDefault(); e.stopPropagation();
+          try{ fileInput.value=''; }catch(_){ }
+          if (fileInput && typeof fileInput.click==='function') fileInput.click();
+        });
+        status.addEventListener('keydown', function(e){
+          if (!status.classList.contains('show')) return;
+          if (e.key==='Enter' || e.key===' ') {
+            e.preventDefault();
+            try{ fileInput.value=''; }catch(_){ }
+          if (fileInput && typeof fileInput.click==='function') fileInput.click();
+          }
+        });
+        status.__hasClickToOpen = true;
+      }
+    }
+  }catch(_){}
+})();
+
+
+
+// Keep playlist panel visible in Fullscreen by relocating it inside #viewer while FS is active.
+(function(){
+  try{
+    // Original placement to restore on exit
+    if (!window.__plistOrigParent) window.__plistOrigParent = null;
+    if (!window.__plistOrigNext) window.__plistOrigNext = null;
+
+    window.__relocatePlistForFS = function(fs){
+      try{
+        if (typeof viewer === 'undefined' || typeof plistPanel === 'undefined') return;
+        if (!viewer || !plistPanel) return;
+        if (fs){
+          // Save original position once
+          if (!window.__plistOrigParent){
+            window.__plistOrigParent = plistPanel.parentNode;
+            window.__plistOrigNext = plistPanel.nextSibling;
+          }
+          // Move into fullscreen subtree if needed
+          if (plistPanel.parentNode !== viewer){
+            viewer.appendChild(plistPanel);
+          }
+        }else{
+          // Restore to original parent/place if we saved it
+          if (window.__plistOrigParent){
+            try{
+              if (window.__plistOrigNext && window.__plistOrigNext.parentNode === window.__plistOrigParent){
+                window.__plistOrigParent.insertBefore(plistPanel, window.__plistOrigNext);
+              }else{
+                window.__plistOrigParent.appendChild(plistPanel);
+              }
+            }catch(_){
+              // Fallback: append
+              try{ window.__plistOrigParent.appendChild(plistPanel); }catch(__){}
+            }
+          }
+        }
+      }catch(_){}
+    };
+  }catch(_){}
+})();
+
+// --- Conditional shielding for left dock ---
+(function(){
+  try{
+    function inButtons(t){
+      if(!t) return false;
+      return !!(t.closest && (t.closest('#plistBtn') || t.closest('#infoBtn')));
+    }
+    function shieldDock(el){
+      if(!el || el.__dockGuard) return;
+      // Only block when clicking *not* on buttons
+      const guard = function(e){
+        if(inButtons(e.target)) return;
+        if(e.type==='dblclick' || (e.type==='pointerdown' && e.button===0)){
+          e.preventDefault();
+        }
+        e.stopPropagation();
+      };
+      ['pointerdown','pointerup','click','dblclick'].forEach(type=>{
+        el.addEventListener(type, guard, true);
+      });
+      el.__dockGuard = true;
+    }
+    function shieldBtn(btn){
+      if(!btn || btn.__btnGuard) return;
+      btn.addEventListener('pointerdown', function(e){ if(e.button===0){ e.stopPropagation(); } }, true);
+      btn.addEventListener('pointerup',   function(e){ e.stopPropagation(); }, true);
+      btn.addEventListener('dblclick',    function(e){ e.preventDefault(); e.stopPropagation(); }, true);
+      // do NOT block 'click' here
+      btn.__btnGuard = true;
+    }
+    shieldDock(typeof plistDock!=='undefined'?plistDock:null);
+    shieldBtn(typeof plistBtn!=='undefined'?plistBtn:null);
+    shieldBtn(typeof infoBtn!=='undefined'?infoBtn:null);
+  }catch(_){}
+})();
+
+// --- Info panel positioning: align to the right of the info button; stack below playlist when both open ---
+function positionInfoPanel(){
+  try{
+    if (!infoBtn || !infoPanel) return;
+    const rDock = plistDock.getBoundingClientRect();
+    infoPanel.style.right = 'auto';
+    infoPanel.style.left  = Math.round(rDock.right) + 8 + 'px';
+    // Base top on overlayTopPx (already tied to infoBtn top)
+    infoPanel.style.top   = overlayTopPx() + 'px';
+    // If playlist panel is open, place info panel *below* it
+    if (plistPanel && plistPanel.classList && plistPanel.classList.contains('show')){
+      const rPl = plistPanel.getBoundingClientRect();
+      const topNow = parseInt(infoPanel.style.top, 10) || overlayTopPx();
+      const desiredTop = Math.max(topNow, Math.round(rPl.bottom) + 8);
+      infoPanel.style.top = desiredTop + 'px';
+    }
+  }catch(e){}
+}
+
+// Keep info panel visible in Fullscreen by relocating it inside #viewer while FS is active.
+(function(){
+  try{
+    if (!window.__infoOrigParent) window.__infoOrigParent = null;
+    if (!window.__infoOrigNext) window.__infoOrigNext = null;
+    window.__relocateInfoForFS = function(fs){
+      try{
+        if (typeof viewer==='undefined') return;
+        // If panel hasn't been created yet, nothing to do now
+        if (typeof infoPanel==='undefined' || !infoPanel) return;
+        if (fs){
+          if (!window.__infoOrigParent){
+            window.__infoOrigParent = infoPanel.parentNode;
+            window.__infoOrigNext = infoPanel.nextSibling;
+          }
+          if (infoPanel.parentNode !== viewer){
+            viewer.appendChild(infoPanel);
+          }
+        }else{
+          if (window.__infoOrigParent){
+            try{
+              if (window.__infoOrigNext && window.__infoOrigNext.parentNode === window.__infoOrigParent){
+                window.__infoOrigParent.insertBefore(infoPanel, window.__infoOrigNext);
+              }else{
+                window.__infoOrigParent.appendChild(infoPanel);
+              }
+            }catch(_){
+              try{ window.__infoOrigParent.appendChild(infoPanel); }catch(__){}
+            }
+          }
+        }
+      }catch(_){}
+    };
+  }catch(_){}
+})();
+
+// --- Unified fullscreen relocation for both panels ---
+function relocatePanelsForFS(fs){
+  try{ if (typeof __relocatePlistForFS === 'function') __relocatePlistForFS(!!fs); }catch(_){}
+  try{ if (typeof __relocateInfoForFS === 'function') __relocateInfoForFS(!!fs); }catch(_){}
+}
+
+
+// === Additional open fallbacks when 'status' (empty state) is visible ===
+(function(){
+  try{
+    // Dropmask click opens file dialog (only in empty state)
+    if (typeof dropmask!=='undefined' && dropmask && !dropmask.__hasClickToOpen) {
+      dropmask.addEventListener('click', function(e){
+        if (!status || !status.classList || !status.classList.contains('show')) return;
+        e.preventDefault(); e.stopPropagation();
+        try{ fileInput.value=''; }catch(_){ }
+        if (fileInput && typeof fileInput.click==='function') fileInput.click();
+      });
+      dropmask.__hasClickToOpen = true;
+    }
+    // Viewer click fallback (only when empty state is shown)
+    if (typeof viewer!=='undefined' && viewer && !viewer.__openOnStatus) {
+      viewer.addEventListener('click', function(e){
+        if (!status || !status.classList || !status.classList.contains('show')) return;
+        // ignore clicks on toolbar/fsBar and left-dock controls (info/playlist)
+        if (e.target && e.target.closest && (e.target.closest('#toolbar') || e.target.closest('#fsBar') || e.target.closest('#plistDock') || e.target.closest('#infoBtn') || e.target.closest('#plistBtn'))) return;
+        e.preventDefault(); e.stopPropagation();
+        try{ fileInput.value=''; }catch(_){ }
+        if (fileInput && typeof fileInput.click==='function') fileInput.click();
+      });
+      viewer.__openOnStatus = true;
+    }
+  }catch(_){}
+})();
+
+/* ===== AUTO-HIDE MENUS (minimal intrusive) ===== */
+(function(){
+  try{
+    const viewer    = document.getElementById('viewer');
+    const hzBottom  = document.getElementById('hzBottom');
+    const hzCorner  = document.getElementById('hzCorner');
+    const infoPanel = document.getElementById('infoPanel');
+    const plistPanel= document.getElementById('plistPanel');
+    if (!viewer || !hzBottom || !hzCorner || (typeof video === 'undefined')) return;
+
+    // Добавлен флаг hold: когда открыт плейлист/инфо — авто‑скрытие отключается.
+    const UIHide = { delay: 2000, timer: null, hidden: false, hold: false };
+    // --- Temporary cursor reveal on any movement while UI is hidden ---
+    let __cursorRevealTO = null;
+    function revealCursorTemp(){
+      try{
+        viewer.classList.add('cursorReveal');
+        if(__cursorRevealTO) clearTimeout(__cursorRevealTO);
+        __cursorRevealTO = setTimeout(()=>{
+          viewer.classList.remove('cursorReveal');
+        }, 800);
+      }catch(_){}
+    }
+
+
+    function panelsOpen(){
+      try{
+        return !!((infoPanel && infoPanel.classList.contains('show')) ||
+          (plistPanel && plistPanel.classList.contains('show')) ||
+          document.getElementById('frameJumpInput'));
+
+      }catch(_){ return false; }
+    }
+    function setHold(on){
+      UIHide.hold = !!on;
+      if(UIHide.hold){
+        showMenus();            // всегда показать меню
+      }else{
+        if(isPlaying()) scheduleHide();
+      }
+    }
+
+    function isPlaying(){ try{ return !video.paused; }catch(_){ return false; } }
+    function clearHideTimer(){ if(UIHide.timer){ clearTimeout(UIHide.timer); UIHide.timer=null; } }
+    function activateHotZones(active){
+      try{
+        if(active){
+          hzBottom.classList.add('active');
+          hzCorner.classList.add('active');
+        }else{
+          hzBottom.classList.remove('active');
+          hzCorner.classList.remove('active');
+        }
+      }catch(_){}
+    }
+    function hideMenus(){
+      if(UIHide.hold) return;       // НЕ скрываем, если открыт один из панелей
+      if(UIHide.hidden) return;
+      viewer.classList.add('ui-autoHide');
+      UIHide.hidden = true;
+      activateHotZones(true);
+    }
+    function showMenus(){
+      if(!UIHide.hidden && !viewer.classList.contains('ui-autoHide')){
+        // уже видно
+      }else{
+        viewer.classList.remove('ui-autoHide');
+        UIHide.hidden = false;
+      }
+      activateHotZones(false);
+      clearHideTimer();
+    }
+    function scheduleHide(){
+      clearHideTimer();
+      if(UIHide.hold) return;       // с открытыми панелями таймер не запускаем
+      if(!isPlaying()) return;
+      UIHide.timer = setTimeout(()=>{ if(isPlaying() && !UIHide.hold) hideMenus(); }, UIHide.delay);
+    }
+    function bumpAutoHide(){
+      if(UIHide.hold){ showMenus(); return; }  // панели открыты — только показываем
+      if(!isPlaying()) return;
+      showMenus();
+      scheduleHide();
+    }
+
+    // Наведение на горячие зоны — показать/продлить, но учитывать hold
+    ['mouseenter','pointerenter'].forEach(ev=>{
+      hzBottom.addEventListener(ev, ()=>{ if(isPlaying()) bumpAutoHide(); }, {passive:true});
+      hzCorner.addEventListener(ev, ()=>{ if(isPlaying()) bumpAutoHide(); }, {passive:true});
+    });
+    // Клики в горячих зонах, когда UI скрыт — не должны кликать по видео
+    ['pointerdown','click','dblclick'].forEach(ev=>{
+      hzBottom.addEventListener(ev, e=>{ if(isPlaying() && !UIHide.hold && UIHide.hidden){ e.preventDefault(); e.stopPropagation(); } }, true);
+      hzCorner.addEventListener(ev, e=>{ if(isPlaying() && !UIHide.hold && UIHide.hidden){ e.preventDefault(); e.stopPropagation(); } }, true);
+    });
+    // Продление таймера при действиях по видимому UI (если нет hold)
+    ['mousemove','pointermove','pointerdown','wheel'].forEach(ev=>{
+      viewer.addEventListener(ev, ()=>{  if(UIHide.hidden) { revealCursorTemp(); }  if(isPlaying() && !UIHide.hold && !UIHide.hidden) scheduleHide();}, {passive:true});
+    });
+    // При уходе курсора — скрываем только если нет hold
+    viewer.addEventListener('mouseleave', ()=>{ if(isPlaying() && !UIHide.hold) hideMenus(); }, {passive:true});
+    // Пауза/Плей
+    video.addEventListener('pause', ()=>{ showMenus(); });  // пауза всегда показывает
+    video.addEventListener('play',  ()=>{
+      if(panelsOpen()){ setHold(true); } else { showMenus(); scheduleHide(); }
+    });
+
+    // Следим за открытием/закрытием панелей через MutationObserver
+    const refreshHold = ()=> setHold(panelsOpen());
+    if(infoPanel){ new MutationObserver(refreshHold).observe(infoPanel,  {attributes:true, attributeFilter:['class']}); }
+    if(plistPanel){ new MutationObserver(refreshHold).observe(plistPanel,{attributes:true, attributeFilter:['class']}); }
+    // Начальная синхронизация
+    refreshHold();
+  }catch(_){}
+
+    try{
+      window.__uiShowMenus = showMenus;
+      window.__uiScheduleHide = scheduleHide;
+      window.__uiBumpAutoHide = bumpAutoHide;
+      window.__uiRefreshHold = refreshHold;
+    }catch(_){}
+})();
+
+// === Frame Jump (edit current frame) ===
+(function(){
+  try{
+    if (!hudFrame) return;
+    hudFrame.style.cursor = 'text';
+    hudFrame.title = 'Click to enter frame number';
+
+    function currentFrame(){
+      try{
+        const fps = getFPS();
+        if(!fps) return null;
+        return Math.max(0, Math.round((video.currentTime||0)*fps));
+      }catch(_){ return null; }
+    }
+    function totalFrames(){
+      try{
+        const fps = getFPS();
+        const dur = video.duration || 0;
+        if(!fps || !isFinite(dur) || dur<=0) return null;
+        return Math.round(dur * fps);
+      }catch(_){ return null; }
+    }
+    function restoreHUD(){
+      try{
+        const input = document.getElementById('frameJumpInput');
+        if(input && input.parentNode) input.parentNode.removeChild(input);
+        const wrap = document.getElementById('frameTotalWrap');
+        if(wrap && wrap.parentNode) wrap.parentNode.removeChild(wrap);
+        updateHUD(true);
+        try{ if(window.__uiRefreshHold) window.__uiRefreshHold(); }catch(_){ }
+      }catch(_){}
+    }
+    function commitFrameEdit(input){
+      try{
+        const val = (input && input.value!=null) ? String(input.value).trim() : '';
+        const num = parseInt(val, 10);
+        const fps = getFPS();
+        const total = totalFrames();
+        if(!fps || !isFinite(fps) || fps<=0){
+          try{ showInfo('FPS unknown — cannot jump to frame'); setTimeout(()=>{ try{ clearStatus(); }catch(_){ } }, 1200); }catch(_){}
+          restoreHUD();
+          try{ if(window.__uiShowMenus) window.__uiShowMenus(); if(window.__uiScheduleHide) window.__uiScheduleHide(); }catch(_){}
+          return;
+        }
+        if(!isFinite(num)){
+          restoreHUD();
+          try{ if(window.__uiShowMenus) window.__uiShowMenus(); if(window.__uiScheduleHide) window.__uiScheduleHide(); }catch(_){}
+          return;
+        }
+        let target = num;
+        if(isFinite(total) && total!=null){
+          if(target < 0) target = 0;
+          if(target > total) target = total;
+        }else{
+          if(target < 0) target = 0;
+        }
+        const t = target / fps;
+        try{ seekTo(t); }catch(_){ try{ video.currentTime = t; }catch(__){} }
+      }catch(_){}
+      restoreHUD();
+      try{ if(window.__uiShowMenus) window.__uiShowMenus(); if(window.__uiScheduleHide) window.__uiScheduleHide(); }catch(_){}
+    }
+    function beginFrameEdit(){
+      try{ try{ allowPlay=false; video.pause(); }catch(_){ } try{ if(typeof updatePlayBtn==='function') updatePlayBtn(); }catch(_){ }
+        const fps = getFPS();
+        if(!fps){
+          try{ showInfo('FPS unknown — cannot jump to frame'); setTimeout(()=>{ try{ clearStatus(); }catch(_){ } }, 1200); }catch(_){}
+          return;
+        }
+        const cur = currentFrame();
+        const total = totalFrames();
+        const input = document.createElement('input');
+        input.type = 'number';
+        input.id = 'frameJumpInput';
+        input.step = '1';
+        input.min = '0';
+        if (isFinite(total)) input.max = String(total);
+        input.value = (cur!=null) ? String(cur) : '';
+        hudFrame.innerHTML = 'Frame: ';
+        hudFrame.appendChild(input);
+        const totalSpan = document.createElement('span');
+        totalSpan.id = 'frameTotalWrap';
+        totalSpan.textContent = (isFinite(total) && total!=null) ? (' / ' + String(total)) : '';
+        hudFrame.appendChild(totalSpan);
+        try{ if(window.__uiRefreshHold) window.__uiRefreshHold(); }catch(_){ }
+        input.addEventListener('keydown', (e)=>{
+          if(e.key==='Enter'){ e.preventDefault(); commitFrameEdit(input); }
+          else if(e.key==='Escape'){ e.preventDefault(); restoreHUD(); try{ if(window.__uiShowMenus) window.__uiShowMenus(); if(window.__uiScheduleHide) window.__uiScheduleHide(); }catch(_){ } }
+        });
+        input.addEventListener('blur', ()=> commitFrameEdit(input));
+        setTimeout(()=>{ try{ input.focus(); input.select(); }catch(_){} }, 0);
+      }catch(_){}
+    }
+    hudFrame.addEventListener('click', (e)=>{
+      if(e.target && e.target.id==='frameJumpInput') return;
+      beginFrameEdit();
+      e.stopPropagation();
+    });
+  }catch(_){}
+})();
+
+// --- Shield HUD from toggling play/pause on clicks (like playlist/info) ---
+(function(){
+  try{
+    const hud = document.getElementById('hud');
+    if(!hud) return;
+    if(hud.__hudGuardBubble) return;
+    const guardBubble = function(e){
+      e.stopPropagation();
+    };
+    ['pointerdown','pointerup','click','dblclick'].forEach(type=>{
+      hud.addEventListener(type, guardBubble, false);
+    });
+    hud.__hudGuardBubble = true;
+  }catch(_){}
+})();
+
+</script>
+<script>
+
+// === Patch: ensure overlays don't block UI after loading; blur status; enable controls ===
+(function(){
+  try{
+    const once = (el, ev, fn)=> el && el.addEventListener(ev, (...a)=>{ try{ fn(...a); }finally{ el.removeEventListener(ev, fn, {once:true}); } }, {once:true});
+    const safe = fn=>{ try{ fn(); }catch(_){} };
+
+    function hideOverlaysAndBlur(){
+      safe(()=> dropmask && dropmask.classList.remove('show'));
+      safe(()=> introBackdrop && introBackdrop.classList.remove('show'));
+      safe(()=> status && status.classList.remove('show'));
+      safe(()=> document.activeElement && document.activeElement.blur && document.activeElement.blur());
+    }
+
+    // On drop: hide masks immediately
+    if (typeof viewer!=='undefined'){
+      viewer.addEventListener('drop', ()=>{ hideOverlaysAndBlur(); }, {capture:true});
+    }
+
+    // After metadata/data/canplay: hide overlays and ensure buttons are active
+    ['loadedmetadata','loadeddata','canplay'].forEach(ev=>{
+      if (typeof video!=='undefined' && video){
+        video.addEventListener(ev, ()=>{
+          hideOverlaysAndBlur();
+          try{
+            if (playBtn) playBtn.disabled = false;
+            if (stepBackBtn) stepBackBtn.disabled = false;
+            if (stepFwdBtn) stepFwdBtn.disabled = false;
+          }catch(_){}
+        }, {once:false});
+      }
+    });
+
+  }catch(_){}
+})();
+
+</script>
+</body>
+</html>
