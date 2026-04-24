@@ -1,0 +1,93 @@
+<!DOCTYPE html>
+<html lang="ru">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>DPG-Video-Viewer_1</title>
+    <link rel="stylesheet" href="./styles/main.css" />
+  </head>
+  <body>
+    <div id="app" class="app">
+      <header class="toolbar" aria-label="Панель управления">
+        <div class="toolbar__group toolbar__group--left">
+          <label class="btn" title="Открыть видео">
+            <span>Открыть</span>
+            <input id="fileInput" type="file" accept="video/*,video/mp4,video/webm,video/x-matroska,video/quicktime" multiple hidden />
+          </label>
+          <button id="playlistToggleBtn" class="btn" type="button">Плейлист</button>
+          <button id="infoBtn" class="btn" type="button">Инфо</button>
+        </div>
+
+        <div class="toolbar__group toolbar__group--center">
+          <div id="timeLabel" class="time-label">00:00 / 00:00</div>
+          <input id="timeRange" class="range" type="range" min="0" max="0" value="0" step="0.001" disabled />
+        </div>
+
+        <div class="toolbar__group toolbar__group--right">
+          <button id="playBtn" class="btn" type="button" disabled>Play</button>
+          <button id="stepBackBtn" class="btn" type="button" disabled>-1 кадр</button>
+          <button id="stepFwdBtn" class="btn" type="button" disabled>+1 кадр</button>
+          <button id="resetViewBtn" class="btn" type="button" disabled>Сброс вида</button>
+          <button id="fullscreenBtn" class="btn" type="button">Fullscreen</button>
+        </div>
+      </header>
+
+      <main id="viewerRoot" class="viewer-root">
+        <section id="viewerStage" class="viewer-stage" aria-label="Область просмотра видео">
+          <canvas id="viewerCanvas" class="viewer-canvas"></canvas>
+
+          <div id="intro" class="intro intro--visible" role="button" tabindex="0" aria-label="Открыть видео">
+            <div class="intro__panel">
+              <h1>DPG-Video-Viewer_1</h1>
+              <p>Перетащи MP4, WebM, MOV или MKV сюда, либо нажми для выбора файлов.</p>
+              <progress id="progressBar" max="1" value="0" hidden></progress>
+            </div>
+          </div>
+
+          <div id="dropMask" class="drop-mask" aria-hidden="true">Отпусти файлы, чтобы добавить их в плейлист</div>
+          <div id="statusBox" class="status-box" hidden></div>
+
+          <div class="overlay overlay--top-left">
+            <div class="hud" id="hud">
+              <span id="hudMode">Режим: —</span>
+              <span class="hud__sep">|</span>
+              <span id="hudFps">FPS: —</span>
+              <span class="hud__sep">|</span>
+              <span id="hudFrame">Кадр: —</span>
+            </div>
+          </div>
+        </section>
+
+        <aside id="playlistPanel" class="playlist-panel" hidden>
+          <div class="playlist-panel__header">
+            <strong>Плейлист</strong>
+            <div class="playlist-panel__actions">
+              <button id="clearAllBtn" class="btn btn--small" type="button">Очистить всё</button>
+            </div>
+          </div>
+          <div id="playlistList" class="playlist-list"></div>
+        </aside>
+      </main>
+
+      <aside id="infoPanel" class="info-panel" hidden>
+        <h2>Горячие клавиши</h2>
+        <ul>
+          <li><b>Space</b> — Play / Pause</li>
+          <li><b>A</b> или <b>←</b> — предыдущий кадр</li>
+          <li><b>D</b> или <b>→</b> — следующий кадр</li>
+          <li><b>W</b> или <b>↑</b> — предыдущее видео</li>
+          <li><b>S</b> или <b>↓</b> — следующее видео</li>
+          <li><b>R</b> — сброс вида</li>
+          <li><b>F</b> — fullscreen</li>
+          <li><b>I</b> — показать / скрыть это окно</li>
+          <li><b>O</b> — открыть файлы</li>
+          <li><b>Колесо мыши</b> — zoom</li>
+          <li><b>ЛКМ + drag</b> — перемещение в flat-режиме</li>
+          <li><b>ЛКМ + drag</b> — вращение камеры в VR-режиме</li>
+        </ul>
+      </aside>
+    </div>
+
+    <script type="module" src="./src/main.js"></script>
+  </body>
+</html>
