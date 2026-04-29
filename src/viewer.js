@@ -46,6 +46,14 @@ export function createViewer(canvas, container) {
   let panY = 0;
   let dragPointerId = null;
   let lastPoint = { x: 0, y: 0 };
+  let videoSize = { width: 16, height: 9 };
+
+  function setVideoSize(width = videoSize.width, height = videoSize.height) {
+    videoSize = {
+      width: Math.max(Number(width) || 16, 1),
+      height: Math.max(Number(height) || 9, 1),
+    };
+  }
 
   function resize() {
     const width = Math.max(container.clientWidth, 1);
@@ -56,7 +64,7 @@ export function createViewer(canvas, container) {
     fitPlane();
   }
 
-  function fitPlane(videoWidth = 16, videoHeight = 9) {
+  function fitPlane(videoWidth = videoSize.width, videoHeight = videoSize.height) {
     if (!plane.visible) {
       return;
     }
@@ -64,7 +72,7 @@ export function createViewer(canvas, container) {
     const distance = 1;
     const visibleHeight = 2 * distance * Math.tan(THREE.MathUtils.degToRad(camera.fov / 2));
     const visibleWidth = visibleHeight * camera.aspect;
-    const videoRatio = videoWidth / videoHeight;
+    const videoRatio = Math.max(videoWidth, 1) / Math.max(videoHeight, 1);
     const viewportRatio = visibleWidth / visibleHeight;
 
     let planeWidth = visibleWidth;
@@ -99,26 +107,30 @@ export function createViewer(canvas, container) {
     planeMaterial.map = videoTexture;
     planeMaterial.needsUpdate = true;
 
-    const aspect = videoElement.videoHeight > 0 ? videoElement.videoWidth / videoElement.videoHeight : 16 / 9;
+    setVideoSize(videoElement.videoWidth, videoElement.videoHeight);
+    const aspect = videoSize.height > 0 ? videoSize.width / videoSize.height : 16 / 9;
     const isVrLike = Math.abs(aspect - VR_ASPECT_TARGET) <= VR_ASPECT_TOLERANCE;
-    setMode(isVrLike ? 'vr' : 'flat', videoElement.videoWidth || 16, videoElement.videoHeight || 9);
+    setMode(isVrLike ? 'vr' : 'flat');
   }
 
-  function setMode(nextMode, videoWidth = 16, videoHeight = 9) {
+  function setMode(nextMode, videoWidth = videoSize.width, videoHeight = videoSize.height) {
+    setVideoSize(videoWidth, videoHeight);
     mode = nextMode;
     controls.enabled = nextMode === 'vr';
     sphere.visible = nextMode === 'vr';
     plane.visible = nextMode !== 'vr';
-    fitPlane(videoWidth, videoHeight);
+    fitPlane();
   }
 
   function setFovFromWheel(deltaY, videoWidth, videoHeight) {
+    setVideoSize(videoWidth, videoHeight);
     camera.fov = clamp(camera.fov + deltaY * 0.02, MIN_FOV, MAX_FOV);
     camera.updateProjectionMatrix();
-    fitPlane(videoWidth, videoHeight);
+    fitPlane();
   }
 
   function resetView(videoWidth = 16, videoHeight = 9) {
+    setVideoSize(videoWidth, videoHeight);
     panX = 0;
     panY = 0;
     camera.fov = 75;
@@ -126,7 +138,7 @@ export function createViewer(canvas, container) {
     controls.reset();
     controls.target.set(0, 0, -1);
     controls.update();
-    fitPlane(videoWidth, videoHeight);
+    fitPlane();
   }
 
   function animate() {
