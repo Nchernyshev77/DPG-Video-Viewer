@@ -1,6 +1,6 @@
 import { createViewer } from './viewer.js';
 
-const APP_NAME = 'DPG-Video-Viewer_1';
+const APP_NAME = 'DPG Video Viewer';
 const DEFAULT_FPS = 30;
 
 const dom = {
@@ -88,6 +88,14 @@ function formatBytes(bytes) {
   return `${value.toFixed(value >= 100 || unitIndex === 0 ? 0 : 1)} ${units[unitIndex]}`;
 }
 
+function createPlaylistId() {
+  if (window.crypto && typeof window.crypto.randomUUID === 'function') {
+    return window.crypto.randomUUID();
+  }
+
+  return `video-${Date.now()}-${Math.random().toString(16).slice(2)}`;
+}
+
 function getCurrentItem() {
   if (state.currentIndex < 0 || state.currentIndex >= state.playlist.length) {
     return null;
@@ -152,12 +160,25 @@ function updatePlaybackUi() {
 }
 
 function renderPlaylist() {
-  dom.playlistList.innerHTML = '';
+  dom.playlistList.replaceChildren();
 
   if (!state.playlist.length) {
     const empty = document.createElement('div');
     empty.className = 'playlist-item';
-    empty.innerHTML = '<div class="playlist-item__meta"><span class="playlist-item__title">Плейлист пуст</span><span class="playlist-item__subtitle">Добавь файлы через кнопку «Открыть» или drag and drop</span></div>';
+
+    const meta = document.createElement('div');
+    meta.className = 'playlist-item__meta';
+
+    const title = document.createElement('span');
+    title.className = 'playlist-item__title';
+    title.textContent = 'Плейлист пуст';
+
+    const subtitle = document.createElement('span');
+    subtitle.className = 'playlist-item__subtitle';
+    subtitle.textContent = 'Добавь файлы через кнопку «Открыть» или drag and drop';
+
+    meta.append(title, subtitle);
+    empty.appendChild(meta);
     dom.playlistList.appendChild(empty);
     return;
   }
@@ -168,10 +189,16 @@ function renderPlaylist() {
 
     const meta = document.createElement('div');
     meta.className = 'playlist-item__meta';
-    meta.innerHTML = `
-      <span class="playlist-item__title">${item.file.name}</span>
-      <span class="playlist-item__subtitle">${formatBytes(item.file.size)}</span>
-    `;
+
+    const title = document.createElement('span');
+    title.className = 'playlist-item__title';
+    title.textContent = item.file.name;
+
+    const subtitle = document.createElement('span');
+    subtitle.className = 'playlist-item__subtitle';
+    subtitle.textContent = formatBytes(item.file.size);
+
+    meta.append(title, subtitle);
 
     const openButton = document.createElement('button');
     openButton.className = 'btn btn--small playlist-item__open';
@@ -256,13 +283,13 @@ async function loadCurrentVideo({ autoplay = false } = {}) {
 }
 
 function addFiles(fileList) {
-  const files = Array.from(fileList).filter((file) => file.type.startsWith('video/') || /\.(mp4|webm|mkv|mov)$/i.test(file.name));
+  const files = Array.from(fileList || []).filter((file) => file.type.startsWith('video/') || /\.(mp4|webm|mkv|mov)$/i.test(file.name));
   if (!files.length) {
     setStatus('Поддерживаются только видеофайлы.', 'error');
     return;
   }
 
-  state.playlist.push(...files.map((file) => ({ id: crypto.randomUUID(), file })));
+  state.playlist.push(...files.map((file) => ({ id: createPlaylistId(), file })));
 
   if (state.currentIndex === -1) {
     state.currentIndex = 0;
@@ -309,10 +336,10 @@ function removeIndex(index) {
 function clearPlaylist() {
   state.playlist = [];
   state.currentIndex = -1;
-  revokePlaylistUrls();
   video.pause();
   video.removeAttribute('src');
   video.load();
+  revokePlaylistUrls();
   renderPlaylist();
   updatePlaybackUi();
   updateEmptyState();
