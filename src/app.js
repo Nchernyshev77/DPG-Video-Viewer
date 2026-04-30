@@ -1,37 +1,5 @@
-  async function importWithTimeout(url, timeoutMs){
-    return await Promise.race([
-      import(url),
-      new Promise((_, reject)=>setTimeout(()=>reject(new Error('Timeout: '+url)), timeoutMs)),
-    ]);
-  }
-
-  async function loadThreeDeps(){
-    const sources = [
-      {
-        three: 'https://cdn.jsdelivr.net/npm/three@0.160.0/build/three.module.js',
-        controls: 'https://cdn.jsdelivr.net/npm/three@0.160.0/examples/jsm/controls/OrbitControls.js',
-      },
-      {
-        three: 'https://unpkg.com/three@0.160.0/build/three.module.js',
-        controls: 'https://unpkg.com/three@0.160.0/examples/jsm/controls/OrbitControls.js?module',
-      },
-    ];
-    let lastErr = null;
-    for (const src of sources){
-      try{
-        const THREE = await importWithTimeout(src.three, 8000);
-        const controlsMod = await importWithTimeout(src.controls, 8000);
-        if (THREE && controlsMod && controlsMod.OrbitControls){
-          return { THREE, OrbitControls: controlsMod.OrbitControls };
-        }
-      }catch(err){
-        lastErr = err;
-      }
-    }
-    throw lastErr || new Error('Unable to load three.js dependencies');
-  }
-
-  const { THREE, OrbitControls } = await loadThreeDeps();
+  import * as THREE from 'https://unpkg.com/three@0.160.0/build/three.module.js';
+  import { OrbitControls } from 'https://unpkg.com/three@0.160.0/examples/jsm/controls/OrbitControls.js?module';
 
   // === UI ===
   
@@ -137,7 +105,15 @@ const controls = new OrbitControls(camera, renderer.domElement);
   controls.enableDamping = true; controls.dampingFactor = 0.07;
   controls.enablePan = false; controls.rotateSpeed = -0.35; // inverted axes
   controls.enableZoom = false; // wheel -> FOV zoom
-  let interacting=false; controls.addEventListener('start',()=>{interacting=true}); controls.addEventListener('end',()=>{interacting=false});
+  let interacting=false;
+  controls.addEventListener('start',()=>{
+    interacting=true;
+    startRenderLoop();
+  });
+  controls.addEventListener('end',()=>{
+    interacting=false;
+    if (video.paused) stopRenderLoop();
+  });
   const isFirefox = /firefox/i.test(navigator.userAgent);
   // projection + shader materials must be defined BEFORE first use
   let uvMesh = null;
@@ -148,7 +124,8 @@ const controls = new OrbitControls(camera, renderer.domElement);
   // Sphere for equirectangular; inside-out w/o mirroring
 
   const material = new THREE.MeshBasicMaterial({ color: 0xffffff });// keep sphere hidden; VR uses cube only// UV sphere (high tessellation) to compare with cube projection
-  const uvGeo = new THREE.SphereGeometry(500,128,128);
+  // Lighter tessellation to reduce startup cost on weak/old GPUs.
+  const uvGeo = new THREE.SphereGeometry(500,64,64);
   uvGeo.scale(-1,1,1);
   uvMesh = new THREE.Mesh(uvGeo, material);
   uvMesh.visible = false;
@@ -167,8 +144,14 @@ const controls = new OrbitControls(camera, renderer.domElement);
   video.controls = false;
 
   // Freeze camera while playing to avoid micro-drift/"waves"; restore damping on pause
-  video.addEventListener('play', ()=>{ controls.enableDamping = false; });
-  video.addEventListener('pause', ()=>{ controls.enableDamping = true; });
+  video.addEventListener('play', ()=>{
+    controls.enableDamping = false;
+    startRenderLoop();
+  });
+  video.addEventListener('pause', ()=>{
+    controls.enableDamping = true;
+    if (!interacting) stopRenderLoop();
+  });
 
   let playlist = [];
   let currentIndex = -1;
@@ -330,7 +313,20 @@ function __renderOnce(){
     }
   }catch(_){}
 }
-renderer.setAnimationLoop(loop);
+let renderLoopRunning = false;
+function startRenderLoop(){
+  if (renderLoopRunning) return;
+  renderLoopRunning = true;
+  renderer.setAnimationLoop(loop);
+}
+function stopRenderLoop(){
+  if (!renderLoopRunning) return;
+  renderLoopRunning = false;
+  renderer.setAnimationLoop(null);
+  __renderOnce();
+}
+// Do not run 60fps loop while idle: start only on demand.
+__renderOnce();
 
   function loadIndex(i, opts={autoplay:false}){
     if(i<0 || i>=playlist.length) return;
