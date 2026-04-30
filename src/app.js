@@ -164,6 +164,7 @@ const controls = new OrbitControls(camera, renderer.domElement);
   let isScrubbing = false;
 
   let sourceFPS = null, displayFPS = null, estimatedFPS = null;
+  let activeLoadId = 0;
 
   let videoTex = null;
 
@@ -546,6 +547,7 @@ function releasePrefetchCache(){
 
 // === Loading ===
   function loadURL(url, name, {autoplay=false}={}){
+    const loadId = ++activeLoadId;
     pendingAutoplay = !!autoplay;
     // reset camera / zoom for new video
     try{ controls.reset(); }catch(e){}
@@ -561,6 +563,9 @@ function releasePrefetchCache(){
     showInfo(`Loading: ${name||''}`);
 
     videoTex=null; material.map=null; material.needsUpdate=true;
+    planeMat.map=null; planeMat.needsUpdate=true;
+    try{ renderer.clear(); }catch(_){}
+    __renderOnce();
 
     // Guard any automatic plays from the element    // Remove previous playGuard if any to avoid duplicate listeners
     try{ if(video.__playGuard){ video.removeEventListener('play', video.__playGuard); video.removeEventListener('playing', video.__playGuard); } }catch(_){ }
@@ -572,21 +577,23 @@ function releasePrefetchCache(){
 
     video.src = url; try{ video.pause(); }catch(e){}; video.load();
 
-    video.addEventListener('loadedmetadata', onLoadedMetadataOnce, { once:true });
-    video.addEventListener('loadeddata', onLoadedDataOnce, { once:true });
-    video.addEventListener('canplay', onCanPlayOnce, { once:true });
-    video.addEventListener('progress', onProgress);
-    video.addEventListener('error', onVideoError, { once:true });
+    video.addEventListener('loadedmetadata', ()=>onLoadedMetadataOnce(loadId), { once:true });
+    video.addEventListener('loadeddata', ()=>onLoadedDataOnce(loadId), { once:true });
+    video.addEventListener('canplay', ()=>onCanPlayOnce(loadId, autoplay), { once:true });
+    video.addEventListener('progress', ()=>onProgress(loadId));
+    video.addEventListener('error', ()=>onVideoError(loadId), { once:true });
   }
 
-  function onLoadedMetadataOnce(){
+  function onLoadedMetadataOnce(loadId){
+    if(loadId !== activeLoadId) return;
     initFPSFromMetadata(currentFile).catch(e=>{ try{ reportError(e,'initFPSFromMetadata'); }catch(_){} });
     haveMetadata = true; try{ video.currentTime = 0; }catch(e){}
     attachVideoTexture(); decideAndApplyMode(); refreshTex();
     timeSlider.disabled=false; playBtn.disabled=false; stepBackBtn.disabled=false; stepFwdBtn.disabled=false;
   }
 
-  function onLoadedDataOnce(){
+  function onLoadedDataOnce(loadId){
+    if(loadId !== activeLoadId) return;
     // Ensure texture is attached and first frame is uploaded
     attachVideoTexture();
     decideAndApplyMode();
@@ -600,9 +607,10 @@ function releasePrefetchCache(){
     updateUI(true);
   }
 
-  function onCanPlayOnce(){
+  function onCanPlayOnce(loadId, autoplay){
+    if(loadId !== activeLoadId) return;
     progress.hidden=true; clearStatus(); introBackdrop.classList.remove('show'); updateUI(true);
-    if(pendingAutoplay){ video.currentTime = 0; allowPlay = true; video.play().catch(()=>{}); } else { allowPlay=false; video.pause(); }
+    if(autoplay){ video.currentTime = 0; allowPlay = true; video.play().catch(()=>{}); } else { allowPlay=false; video.pause(); }
     updatePlayBtn();
     // Measure FPS only if playing; never start playback for it
     setTimeout(()=>{ if(!video.paused) autoEstimateFPS(); }, 600);
@@ -620,8 +628,15 @@ function releasePrefetchCache(){
     if(!displayFPS && estimatedFPS) displayFPS = Math.round(estimatedFPS);
   }
 
-  function onProgress(){ try{ if(video.buffered.length){ const end = video.buffered.end(video.buffered.length-1); const ratio = Math.min(1, (video.duration? end/video.duration : 0)); progress.value = ratio; } }catch(e){} }
-  function onVideoError(){ alert('Playback error. The codec may not be supported by this browser.'); status.classList.remove('show'); introBackdrop.classList.remove('show'); progress.hidden=true; }
+  function onProgress(loadId){
+    if(loadId !== activeLoadId) return;
+    try{ if(video.buffered.length){ const end = video.buffered.end(video.buffered.length-1); const ratio = Math.min(1, (video.duration? end/video.duration : 0)); progress.value = ratio; } }catch(e){}
+  }
+  function onVideoError(loadId){
+    if(loadId !== activeLoadId) return;
+    alert('Playback error. The codec may not be supported by this browser.');
+    status.classList.remove('show'); introBackdrop.classList.remove('show'); progress.hidden=true;
+  }
 
   // === Playback ===
   function setPlayUI(isPlaying){
@@ -810,7 +825,15 @@ function defaultFOV(){ try{ return (renderMode==='flat') ? (80 - 2*WHEEL_STEP) :
   const applyFOV=f=>{ f=Math.min(100,Math.max(20,f)); camera.fov=f; camera.updateProjectionMatrix(); zoomSlider.value = String(Math.round(ZSUM - f)); fitPlane(); }
   on(zoomSlider,'input',()=>applyFOV(ZSUM - parseFloat(zoomSlider.value)));
   on(viewer,'wheel',e=>{ e.preventDefault(); const step=3; applyFOV(camera.fov + (e.deltaY>0?step:-step)); }, {passive:false});
-  on(resetViewBtn,'click',()=>{ controls.reset(); applyFOV(defaultFOV()); panX=0; panY=0; if(uvMesh) uvMesh.rotation.set(0,-Math.PI/2,0); fitPlane(); });
+  on(resetViewBtn,'click',()=>{
+    controls.reset();
+    applyFOV(defaultFOV());
+    panX=0; panY=0;
+    if(uvMesh) uvMesh.rotation.set(0,-Math.PI/2,0);
+    fitPlane();
+    updateUI(true);
+    __renderOnce();
+  });
 
   // === Drag & Drop and file dialog ===
 
