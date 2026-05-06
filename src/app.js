@@ -1,37 +1,5 @@
-  async function importWithTimeout(url, timeoutMs){
-    return await Promise.race([
-      import(url),
-      new Promise((_, reject)=>setTimeout(()=>reject(new Error('Timeout: '+url)), timeoutMs)),
-    ]);
-  }
-
-  async function loadThreeDeps(){
-    const sources = [
-      {
-        three: 'https://cdn.jsdelivr.net/npm/three@0.160.0/build/three.module.js',
-        controls: 'https://cdn.jsdelivr.net/npm/three@0.160.0/examples/jsm/controls/OrbitControls.js',
-      },
-      {
-        three: 'https://unpkg.com/three@0.160.0/build/three.module.js',
-        controls: 'https://unpkg.com/three@0.160.0/examples/jsm/controls/OrbitControls.js?module',
-      },
-    ];
-    let lastErr = null;
-    for (const src of sources){
-      try{
-        const THREE = await importWithTimeout(src.three, 8000);
-        const controlsMod = await importWithTimeout(src.controls, 8000);
-        if (THREE && controlsMod && controlsMod.OrbitControls){
-          return { THREE, OrbitControls: controlsMod.OrbitControls };
-        }
-      }catch(err){
-        lastErr = err;
-      }
-    }
-    throw lastErr || new Error('Unable to load three.js dependencies');
-  }
-
-  const { THREE, OrbitControls } = await loadThreeDeps();
+  import * as THREE from 'https://unpkg.com/three@0.160.0/build/three.module.js';
+  import { OrbitControls } from 'https://unpkg.com/three@0.160.0/examples/jsm/controls/OrbitControls.js?module';
 
   // === UI ===
   
@@ -1585,3 +1553,4 @@ function relocatePanelsForFS(fs){
     hud.__hudGuardBubble = true;
   }catch(_){}
 })();
+
