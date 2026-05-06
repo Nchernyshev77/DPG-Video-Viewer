@@ -590,7 +590,6 @@ function releasePrefetchCache(){
     haveMetadata = true; try{ video.currentTime = 0; }catch(e){}
     attachVideoTexture(); decideAndApplyMode(); refreshTex();
     timeSlider.disabled=false; playBtn.disabled=false; stepBackBtn.disabled=false; stepFwdBtn.disabled=false;
-    __renderOnce();
   }
 
   function onLoadedDataOnce(loadId){
@@ -606,7 +605,6 @@ function releasePrefetchCache(){
     clearStatus();
     introBackdrop.classList.remove('show');
     updateUI(true);
-    __renderOnce();
   }
 
   function onCanPlayOnce(loadId, autoplay){
@@ -614,7 +612,6 @@ function releasePrefetchCache(){
     progress.hidden=true; clearStatus(); introBackdrop.classList.remove('show'); updateUI(true);
     if(autoplay){ video.currentTime = 0; allowPlay = true; video.play().catch(()=>{}); } else { allowPlay=false; video.pause(); }
     updatePlayBtn();
-    __renderOnce();
     // Measure FPS only if playing; never start playback for it
     setTimeout(()=>{ if(!video.paused) autoEstimateFPS(); }, 600);
   }
