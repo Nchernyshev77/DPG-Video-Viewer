@@ -169,7 +169,9 @@ export function createPanels(elements, playlist) {
     playlist.select(Number(elements.playlistSel.value)),
   );
   life.on(document, "click", (event) => {
-    if (!viewer.contains(event.target)) close();
+    // A remove-button click can detach its target before it bubbles to document.
+    // The original event path still records that the click happened in the panel.
+    if (!event.composedPath().includes(viewer)) close();
   });
   life.on(window, "resize", schedulePosition);
   life.on(

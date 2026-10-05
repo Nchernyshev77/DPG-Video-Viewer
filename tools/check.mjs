@@ -26,9 +26,10 @@ for (const path of ["src", "tools", "tests"]) {
     if (check.status) throw new Error(check.stderr);
     const text = await readFile(file, "utf8");
     // Browser evaluate callbacks resolve dynamic imports against the served page.
-    const imports = file.includes("/tests/")
-      ? /from\s+["']([^"']+)["']/g
-      : /(?:from\s+|import\(\s*)["']([^"']+)["']/g;
+    const imports =
+      path === "tests"
+        ? /from\s+["']([^"']+)["']/g
+        : /(?:from\s+|import\(\s*)["']([^"']+)["']/g;
     for (const [, imported] of text.matchAll(imports)) {
       if (imported.startsWith("."))
         await readFile(new URL(imported, pathToFileURL(file)));

@@ -163,6 +163,11 @@
 #hudFrame {
   cursor: text;
 }
+#fsTime {
+  white-space: nowrap;
+  font-variant-numeric: tabular-nums;
+  flex-shrink: 0;
+}
 #statusText {
   margin-bottom: 0.5rem;
 }
