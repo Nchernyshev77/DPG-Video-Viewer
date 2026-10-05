@@ -1,0 +1,13 @@
+export const CONFIG = Object.freeze({
+  minFov: 20,
+  maxFov: 100,
+  flatFov: 74,
+  vrFov: 80,
+  wheelStep: 3,
+  maxPixelRatio: 2,
+  uiIntervalMs: 80,
+  autoHideMs: 2000,
+  fallbackFps: 30,
+  maxMetadataBytes: 4 * 1024 * 1024,
+  maxMetadataBoxes: 4096,
+});

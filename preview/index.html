@@ -1,0 +1,309 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>DPG Video Viewer</title>
+    <link rel="stylesheet" href="./styles/base.css" />
+    <link rel="stylesheet" href="./styles/viewer.css" />
+    <link rel="stylesheet" href="./styles/controls.css" />
+    <link rel="stylesheet" href="./styles/panels.css" />
+  </head>
+  <body>
+    <div id="app">
+      <div id="toolbar" hidden aria-hidden="true">
+        <input
+          id="file"
+          type="file"
+          accept="video/*,.mp4,.webm,.mkv,.mov,.m4v"
+          multiple
+        />
+        <div id="tc">00:00 / 00:00</div>
+        <input
+          id="time"
+          type="range"
+          min="0"
+          max="0"
+          value="0"
+          step="0.001"
+          disabled
+        />
+        <input id="zoom" type="range" min="20" max="100" value="80" step="1" />
+        <select id="playlist" disabled></select>
+      </div>
+
+      <div id="viewer">
+        <div id="hzBottom" class="hotZone" aria-hidden="true"></div>
+        <div id="hzCorner" class="hotZone" aria-hidden="true"></div>
+
+        <div id="introBackdrop" class="show"></div>
+        <div id="dropmask">Drag & Drop MP4/WebM files here</div>
+        <div
+          id="status"
+          class="show"
+          role="button"
+          tabindex="0"
+          aria-label="Choose a video"
+        >
+          <div id="statusText" aria-live="polite">
+            Drag & Drop a video here or <b>click here</b>.
+          </div>
+          <progress max="1" value="0" id="progress" hidden></progress>
+        </div>
+
+        <div id="hud">
+          <span id="hudFps">FPS: —</span><span class="sep">|</span
+          ><span
+            id="hudFrame"
+            tabindex="0"
+            role="button"
+            title="Click to enter frame number"
+            aria-label="Jump to frame"
+            >Frame: —</span
+          >
+        </div>
+
+        <div id="plistDock">
+          <button
+            id="plistBtn"
+            class="btn"
+            title="Playlist — click to switch or remove"
+            aria-label="Playlist"
+            aria-controls="plistPanel"
+            aria-expanded="false"
+          >
+            <span class="i" aria-hidden="true"
+              ><svg
+                viewBox="0 0 24 24"
+                stroke="currentColor"
+                fill="none"
+                stroke-width="1.6"
+                stroke-linecap="round"
+                stroke-linejoin="round"
+              >
+                <path d="M4 6h16" />
+                <path d="M4 12h16" />
+                <path d="M4 18h10" /></svg
+            ></span>
+            <span id="plistBtnLabel"></span>
+          </button>
+          <button
+            id="infoBtn"
+            class="btn"
+            title="Hotkeys / Info"
+            aria-label="Hotkeys and information"
+            aria-controls="infoPanel"
+            aria-expanded="false"
+          >
+            <span class="i" aria-hidden="true"
+              ><svg
+                viewBox="0 0 24 24"
+                width="14"
+                height="14"
+                stroke="currentColor"
+                fill="none"
+                stroke-width="1.9"
+                stroke-linecap="round"
+                stroke-linejoin="round"
+              >
+                <circle cx="12" cy="12" r="10.5" />
+                <circle
+                  cx="12"
+                  cy="8.4"
+                  r="2.1"
+                  fill="currentColor"
+                  stroke="none"
+                />
+                <rect
+                  x="10"
+                  y="10.8"
+                  width="4.0"
+                  height="8.6"
+                  rx="2.0"
+                  fill="currentColor"
+                  stroke="none"
+                /></svg
+            ></span>
+          </button>
+        </div>
+
+        <!-- fullscreen timeline overlay -->
+        <div id="fsBar" class="show">
+          <button
+            id="play"
+            class="btn"
+            title="Play / Pause — Space or Left click"
+            disabled
+          >
+            <span class="i" aria-hidden="true" id="playIcon">
+              <svg viewBox="0 0 24 24" fill="currentColor">
+                <path d="M8 5l10 7l-10 7z" />
+              </svg>
+            </span>
+            <span id="playLabel">Play</span>
+          </button>
+          <button
+            id="stepBack"
+            class="btn"
+            title="Previous frame — ← or A"
+            aria-label="Previous frame"
+            disabled
+          >
+            <span class="i" aria-hidden="true"
+              ><svg
+                viewBox="0 0 24 24"
+                stroke="currentColor"
+                fill="none"
+                stroke-width="1.6"
+                stroke-linecap="round"
+                stroke-linejoin="round"
+              >
+                <path d="M5 6v12" />
+                <path d="M19 5l-10 7l10 7" /></svg
+            ></span>
+          </button>
+          <button
+            id="stepFwd"
+            class="btn"
+            title="Next frame — → or D"
+            aria-label="Next frame"
+            disabled
+          >
+            <span class="i" aria-hidden="true"
+              ><svg
+                viewBox="0 0 24 24"
+                stroke="currentColor"
+                fill="none"
+                stroke-width="1.6"
+                stroke-linecap="round"
+                stroke-linejoin="round"
+              >
+                <path d="M19 6v12" />
+                <path d="M5 5l10 7l-10 7" /></svg
+            ></span>
+          </button>
+          <div id="fsTime">00:00 / 00:00</div>
+          <input
+            id="fsTimeRange"
+            type="range"
+            min="0"
+            max="0"
+            value="0"
+            step="0.001"
+            aria-label="Timeline"
+            disabled
+          />
+          <button
+            id="fsBtn"
+            class="btn"
+            title="Fullscreen — Double‑click viewer"
+            aria-label="Fullscreen"
+          >
+            <span class="i" aria-hidden="true"
+              ><svg
+                viewBox="0 0 24 24"
+                stroke="currentColor"
+                fill="none"
+                stroke-width="1.6"
+                stroke-linecap="round"
+                stroke-linejoin="round"
+              >
+                <path d="M4 9V4h5" />
+                <path d="M20 9V4h-5" />
+                <path d="M4 15v5h5" />
+                <path d="M20 15v5h-5" /></svg
+            ></span>
+          </button>
+          <button
+            id="resetView"
+            class="btn"
+            title="Reset view — R"
+            aria-label="Reset view"
+          >
+            <span class="i" aria-hidden="true"
+              ><svg
+                viewBox="0 0 24 24"
+                stroke="currentColor"
+                fill="none"
+                stroke-width="1.6"
+                stroke-linecap="round"
+                stroke-linejoin="round"
+              >
+                <path d="M21 12a9 9 0 1 1-2.64-6.36" />
+                <path d="M21 3v4h-4" /></svg
+            ></span>
+            <span>Reset</span>
+          </button>
+        </div>
+        <!-- Info panel -->
+        <aside id="infoPanel" aria-label="Hotkeys">
+          <header>Hotkeys</header>
+          <div class="body">
+            <dl>
+              <dt>Play / Pause</dt>
+              <dd>Space or Left click</dd>
+              <dt>Move</dt>
+              <dd>Mouse drag</dd>
+              <dt>Zoom</dt>
+              <dd>Mouse wheel</dd>
+              <dt>Step −1 frame</dt>
+              <dd>← or A</dd>
+              <dt>Step +1 frame</dt>
+              <dd>→ or D</dd>
+              <dt>Prev video</dt>
+              <dd>↑ or W</dd>
+              <dt>Next video</dt>
+              <dd>↓ or S</dd>
+              <dt>Reset view</dt>
+              <dd>R</dd>
+              <dt>Open playlist</dt>
+              <dd>E</dd>
+              <dt>Close all (playlist)</dt>
+              <dd>Q</dd>
+              <dt>Close all (playlist icon)</dt>
+              <dd>Right click</dd>
+              <dt>Open info</dt>
+              <dd>I</dd>
+              <dt>Open file</dt>
+              <dd>O</dd>
+              <dt>Select frame</dt>
+              <dd>Left click on frames</dd>
+            </dl>
+          </div>
+        </aside>
+        <div id="plistPanel" role="dialog" aria-label="Playlist">
+          <div id="plistFooter">
+            <button id="closeAll" class="btn" title="Close all videos">
+              <span class="i" aria-hidden="true"
+                ><svg
+                  viewBox="0 0 24 24"
+                  stroke="currentColor"
+                  fill="none"
+                  stroke-width="1.6"
+                  stroke-linecap="round"
+                  stroke-linejoin="round"
+                >
+                  <path d="M18 6L6 18" />
+                  <path d="M6 6l12 12" /></svg
+              ></span>
+              <span>Close all</span>
+            </button>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <span id="meas"></span>
+
+    <noscript>This viewer needs JavaScript to play videos.</noscript>
+    <script type="importmap">
+      {
+        "imports": {
+          "three": "./vendor/three/three.module.min.js",
+          "three/addons/": "./vendor/three/addons/"
+        }
+      }
+    </script>
+    <script type="module" src="./src/main.js"></script>
+  </body>
+</html>

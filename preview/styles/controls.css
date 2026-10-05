@@ -1,0 +1,199 @@
+/* compact buttons */
+#fsBtn {
+  width: 36px;
+  justify-content: center;
+}
+#closeAll {
+  width: auto;
+}
+#infoBtn {
+  width: auto;
+}
+
+/* fullscreen timeline overlay */
+#fsBar .btn span:not(.i) {
+  display: none;
+}
+#fsBar {
+  position: absolute;
+  left: 50%;
+  bottom: 10px;
+  transform: translateX(-50%);
+  display: none;
+  align-items: center;
+  gap: 0.5rem;
+  background: #101010cc;
+  border: 1px solid #2a2a2a;
+  border-radius: 10px;
+  padding: 0.45rem 0.6rem;
+  z-index: 3;
+}
+#fsBar.show {
+  display: flex;
+}
+#fsBar input[type="range"] {
+  width: min(62vw, 900px);
+}
+#fsTime {
+  min-width: 90px;
+  opacity: 0.9;
+}
+
+/* HUD (fps/frame) */
+
+/* playlist button dock under the HUD */
+#plistDock {
+  position: absolute;
+  left: 8px;
+  top: 44px;
+  z-index: 3;
+}
+#plistDock .btn {
+  width: auto;
+}
+
+#hud {
+  position: absolute;
+  top: 8px;
+  left: 8px;
+  z-index: 3;
+  background: #101010cc;
+  border: 1px solid #2a2a2a;
+  padding: 0.25rem 0.5rem;
+  border-radius: 8px;
+  font-size: 0.9rem;
+  color: #d8d8d8;
+  white-space: nowrap;
+
+  display: inline-flex;
+  align-items: center;
+}
+#hud .sep {
+  opacity: 0.6;
+  margin: 0 0.25rem;
+}
+
+/* ===== Auto-hide UI (menus) ===== */
+#fsBar,
+#plistDock,
+#plistPanel,
+#infoPanel {
+  transition: opacity 0.18s ease;
+}
+#viewer.ui-autoHide #fsBar,
+#viewer.ui-autoHide #plistDock,
+#viewer.ui-autoHide #plistPanel,
+#viewer.ui-autoHide #infoPanel,
+#viewer.ui-autoHide #hud {
+  opacity: 0;
+  pointer-events: none;
+}
+/* Optionally hide cursor when menus are auto-hidden */
+#viewer.ui-autoHide {
+  cursor: none;
+}
+#viewer.ui-autoHide.cursorReveal {
+  cursor: auto;
+}
+/* Invisible hover zones to reveal menus while playing */
+.hotZone {
+  position: absolute;
+  z-index: 4;
+  pointer-events: none;
+}
+.hotZone.active {
+  pointer-events: auto;
+}
+#hzBottom {
+  left: 0;
+  right: 0;
+  bottom: 0;
+  height: 120px;
+}
+#hzCorner {
+  left: 0;
+  top: 0;
+  width: 220px;
+  height: 160px;
+}
+
+/* HUD frame-jump input */
+#hud input#frameJumpInput {
+  font: inherit;
+  color: var(--text);
+  background: var(--bg-soft, #1b1b1b);
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  padding: 0 0.25rem;
+  outline: none;
+  display: inline-block;
+  vertical-align: middle;
+  min-width: 8ch;
+  width: auto;
+  line-height: 1.2;
+}
+#hud input#frameJumpInput:focus {
+  border-color: var(--accent);
+  background: var(--bg, #0f0f10);
+}
+/* Hide steppers (only for frameJumpInput) — жёстко, для всех движков */
+#hud input#frameJumpInput::-webkit-outer-spin-button,
+#hud input#frameJumpInput::-webkit-inner-spin-button {
+  -webkit-appearance: none !important;
+  margin: 0 !important;
+}
+#hud input#frameJumpInput[type="number"] {
+  -moz-appearance: textfield !important;
+}
+#hud input#frameJumpInput {
+  -webkit-appearance: none !important;
+  appearance: none !important;
+}
+
+#hud #hudFrame {
+  display: inline-flex;
+  align-items: center;
+  flex-wrap: nowrap;
+  gap: 0.25rem;
+}
+#hud #hudFrame > * {
+  flex: 0 0 auto;
+}
+
+#hudFrame {
+  cursor: text;
+}
+#fsTime {
+  white-space: nowrap;
+  font-variant-numeric: tabular-nums;
+  flex-shrink: 0;
+}
+#statusText {
+  margin-bottom: 0.5rem;
+}
+.fps-warning {
+  color: #ff4a4a;
+}
+@media (max-width: 650px) {
+  #fsBar {
+    width: calc(100% - 16px);
+    gap: 0.3rem;
+    padding: 0.4rem;
+  }
+  #fsBar input[type="range"] {
+    width: auto;
+    min-width: 0;
+    flex: 1;
+  }
+  #fsTime {
+    min-width: 78px;
+    font-size: 0.8rem;
+  }
+  #fsBar .btn {
+    padding: 0.4rem;
+    flex-shrink: 0;
+  }
+  #fsBtn {
+    width: auto;
+  }
+}
