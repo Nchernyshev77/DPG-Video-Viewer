@@ -1,0 +1,157 @@
+:root {
+  --bg: #000;
+  --bg-soft: #0c0c0c;
+  --panel: #111;
+  --muted: #9aa3ad;
+  --text: #e8e8e8;
+  --line: #222;
+  --accent: #4aa3ff;
+}
+* {
+  box-sizing: border-box;
+}
+html,
+body {
+  height: 100%;
+}
+html {
+  background: var(--bg);
+}
+body {
+  margin: 0;
+  background: var(--bg);
+  color: var(--text);
+  font:
+    14px/1.4 system-ui,
+    -apple-system,
+    Segoe UI,
+    Roboto,
+    Ubuntu,
+    "Helvetica Neue",
+    Arial;
+  overflow: hidden;
+}
+
+/* Minimal dark UI */
+#app {
+  position: fixed;
+  inset: 0;
+  display: flex;
+  flex-direction: column;
+}
+#toolbar {
+  position: absolute;
+  left: -9999px;
+  top: -9999px;
+  width: 0;
+  height: 0;
+  overflow: hidden;
+  border: 0;
+  padding: 0;
+  margin: 0;
+  background: transparent;
+}
+.group {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+}
+.btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.45rem;
+  background: #151515cc;
+  color: var(--text);
+  border: 1px solid var(--line);
+  padding: 0.42rem 0.62rem;
+  border-radius: 8px;
+  cursor: pointer;
+  user-select: none;
+}
+.btn:hover {
+  background: #1b1b1bcc;
+}
+.btn:active {
+  transform: translateY(1px);
+}
+.btn .i {
+  width: 14px;
+  height: 14px;
+  display: inline-block;
+}
+.btn svg {
+  width: 14px;
+  height: 14px;
+  display: block;
+}
+input[type="file"] {
+  display: none;
+}
+select {
+  background: #151515;
+  color: var(--text);
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  padding: 0.35rem 0.5rem;
+  max-width: 40vw;
+}
+
+:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 3px;
+}
+button:disabled {
+  cursor: default;
+  opacity: 0.45;
+}
+
+/* range track + thumb — same everywhere (normal + fullscreen) */
+input[type="range"],
+#fsBar input[type="range"] {
+  -webkit-appearance: none;
+  appearance: none;
+  height: 4px;
+  background: #232323;
+  border-radius: 999px;
+  outline: none;
+  padding: 0;
+}
+/* WebKit */
+input[type="range"]::-webkit-slider-runnable-track,
+#fsBar input[type="range"]::-webkit-slider-runnable-track {
+  height: 4px;
+  background: #232323;
+  border-radius: 999px;
+}
+input[type="range"]::-webkit-slider-thumb,
+#fsBar input[type="range"]::-webkit-slider-thumb {
+  -webkit-appearance: none;
+  width: 14px;
+  height: 14px;
+  border-radius: 50%;
+  background: var(--accent);
+  border: 0;
+  margin-top: -5px;
+}
+/* Firefox */
+input[type="range"]::-moz-range-track,
+#fsBar input[type="range"]::-moz-range-track {
+  height: 4px;
+  background: #232323;
+  border-radius: 999px;
+}
+input[type="range"]::-moz-range-progress,
+#fsBar input[type="range"]::-moz-range-progress {
+  height: 4px;
+  background: #232323;
+  border-radius: 999px;
+}
+input[type="range"]::-moz-range-thumb,
+#fsBar input[type="range"]::-moz-range-thumb {
+  width: 14px;
+  height: 14px;
+  border-radius: 50%;
+  background: var(--accent);
+  border: 0;
+}
+/* Old Edge/IE */

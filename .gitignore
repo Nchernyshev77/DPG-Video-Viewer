@@ -1,0 +1,5 @@
+node_modules/
+dist/
+tests/.fixtures/
+test-results/
+.DS_Store
