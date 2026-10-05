@@ -154,13 +154,15 @@ test("playlist duplicates, literal filenames, rapid switching and GPU resource c
   const page = await pageFor(t);
   const buffer = await readFile(`${fixtures}/flat.mp4`);
   const name = "<img src=x onerror=alert(1)>.mp4";
-  await page
-    .locator("#file")
-    .setInputFiles([
-      { name, mimeType: "video/mp4", buffer },
-      `${fixtures}/vr.mp4`,
-      { name, mimeType: "video/mp4", buffer },
-    ]);
+  await page.locator("#file").setInputFiles([
+    { name, mimeType: "video/mp4", buffer },
+    {
+      name: "vr.mp4",
+      mimeType: "video/mp4",
+      buffer: await readFile(`${fixtures}/vr.mp4`),
+    },
+    { name, mimeType: "video/mp4", buffer },
+  ]);
   await page.waitForFunction(
     async () => (await import("./src/main.js")).app.player.ready,
   );
@@ -237,13 +239,11 @@ test("drop after clearing, decoding error and recovery with WebM", async (t) => 
     async () => (await import("./src/main.js")).app.player.ready,
   );
   assert.equal(await page.locator("#dropmask").isVisible(), false);
-  await page
-    .locator("#file")
-    .setInputFiles({
-      name: "broken.mp4",
-      mimeType: "video/mp4",
-      buffer: Buffer.from("invalid video"),
-    });
+  await page.locator("#file").setInputFiles({
+    name: "broken.mp4",
+    mimeType: "video/mp4",
+    buffer: Buffer.from("invalid video"),
+  });
   await page.waitForFunction(async () =>
     Boolean((await import("./src/main.js")).app.player.error),
   );
