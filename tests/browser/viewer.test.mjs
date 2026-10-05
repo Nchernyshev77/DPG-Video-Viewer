@@ -12,6 +12,7 @@ let server;
 let subpathServer;
 let origin;
 let subpathOrigin;
+const appHandles = new WeakMap();
 const listen = (server) =>
   new Promise((resolve) => server.listen(0, "127.0.0.1", resolve));
 const current = (page) =>
@@ -57,28 +58,39 @@ async function pageFor(t, url = origin, options = {}) {
     if (message.type() === "error") failures.push(message.text());
   });
   t.after(async () => {
+    await appHandles.get(page)?.dispose();
     await page.close();
     assert.deepEqual(failures, [], "Unexpected browser errors");
   });
   await page.goto(`${url}/`);
-  await page.waitForFunction(async () =>
-    Boolean((await import("./src/main.js")).app),
+  await page.waitForFunction(() =>
+    Boolean(document.querySelector("#viewer canvas")),
   );
+  const handle = await page.evaluateHandle(
+    async () => (await import("./src/main.js")).app,
+  );
+  assert.equal(await page.evaluate((app) => Boolean(app), handle), true);
+  appHandles.set(page, handle);
   return page;
+}
+async function waitReady(page) {
+  // waitForFunction polls a synchronous predicate; a Promise is already truthy.
+  await page.waitForFunction((app) => app.player.ready, appHandles.get(page));
 }
 async function ready(page, file) {
   await page.locator("#file").setInputFiles(`${fixtures}/${file}`);
   await page.waitForFunction(
-    async () => (await import("./src/main.js")).app.player.ready,
+    ({ app, name }) => app.player.item?.name === name && app.player.ready,
+    { app: appHandles.get(page), name: file },
   );
 }
 async function waitSeek(page, time) {
-  await page.waitForFunction(async (value) => {
-    const player = (await import("./src/main.js")).app.player;
-    return (
-      !player.video.seeking && Math.abs(player.currentTime - value) < 0.005
-    );
-  }, time);
+  await page.waitForFunction(
+    ({ app, value }) =>
+      !app.player.video.seeking &&
+      Math.abs(app.player.currentTime - value) < 0.005,
+    { app: appHandles.get(page), value: time },
+  );
 }
 
 test("local dependencies, actual MP4 decoding and zero idle redraws", async (t) => {
@@ -163,9 +175,7 @@ test("playlist duplicates, literal filenames, rapid switching and GPU resource c
     },
     { name, mimeType: "video/mp4", buffer },
   ]);
-  await page.waitForFunction(
-    async () => (await import("./src/main.js")).app.player.ready,
-  );
+  await waitReady(page);
   await page.locator("#plistBtn").click();
   assert.equal(await page.locator("#plistPanel img").count(), 0);
   assert.equal(
@@ -176,14 +186,12 @@ test("playlist duplicates, literal filenames, rapid switching and GPU resource c
     await page.evaluate(async (index) => {
       (await import("./src/main.js")).app.playlist.select(index);
     }, i % 2);
-    await page.waitForFunction(
-      async () => (await import("./src/main.js")).app.player.ready,
-    );
+    await waitReady(page);
     await page.waitForTimeout(35);
   }
   await page.waitForFunction(
-    async () =>
-      (await import("./src/main.js")).app.view.diagnostics().mode === "vr",
+    (app) => app.view.diagnostics().mode === "vr",
+    appHandles.get(page),
   );
   await page.screenshot({ path: `${root}/test-results/vr.png` });
   const memory = await page.evaluate(async () =>
@@ -195,9 +203,7 @@ test("playlist duplicates, literal filenames, rapid switching and GPU resource c
   await page.evaluate(async () => {
     (await import("./src/main.js")).app.playlist.select(1);
   });
-  await page.waitForFunction(
-    async () => (await import("./src/main.js")).app.player.ready,
-  );
+  await waitReady(page);
   assert.equal(
     await page.evaluate(() => document.querySelectorAll("video").length),
     1,
@@ -235,17 +241,16 @@ test("drop after clearing, decoding error and recovery with WebM", async (t) => 
         new DragEvent("drop", { bubbles: true, dataTransfer: transfer }),
       );
   }, bytes);
-  await page.waitForFunction(
-    async () => (await import("./src/main.js")).app.player.ready,
-  );
+  await waitReady(page);
   assert.equal(await page.locator("#dropmask").isVisible(), false);
   await page.locator("#file").setInputFiles({
     name: "broken.mp4",
     mimeType: "video/mp4",
     buffer: Buffer.from("invalid video"),
   });
-  await page.waitForFunction(async () =>
-    Boolean((await import("./src/main.js")).app.player.error),
+  await page.waitForFunction(
+    (app) => Boolean(app.player.error),
+    appHandles.get(page),
   );
   assert.equal(await page.locator("#play").isDisabled(), true);
   assert.equal(await page.locator("#status").isVisible(), true);
