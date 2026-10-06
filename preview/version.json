@@ -1,12 +1,14 @@
 {
   "branch": "refactor/modular-viewer",
-  "commit": "6ac4485030df49e30a8c4db71ed3c3d330b9c26c",
-  "revision": "40343446279d17e6",
+  "commit": "93cde7fc2f8c522093779cc92a83326f22d9f60f",
+  "revision": "5143f8834a268460",
   "productionBranch": "main",
   "productionCommit": "b26d5c8be5068f4b9950274e6e0d122b8df39b60",
   "features": [
     "flat-blob-preloading",
     "bounded-file-cache",
+    "fast-suspended-cache-recovery",
+    "local-file-backed-cache",
     "rendered-frame-step-queue",
     "continuous-playback-rendering",
     "stationary-playback-camera",
@@ -18,10 +20,10 @@
     "versioned-module-graph"
   ],
   "tests": {
-    "unit": 28,
-    "chromium": 15,
-    "firefox": 15,
-    "ci": "https://github.com/Nchernyshev77/DPG-Video-Viewer/actions/runs/37476168637",
-    "environment": "Linux CI, software WebGL, synthetic MP4/WebM and 3840x1920 A/B comparison; other browsers and real GPU/network-drive playback require separate verification"
+    "unit": 33,
+    "chromium": 17,
+    "firefox": 17,
+    "ci": "https://github.com/Nchernyshev77/DPG-Video-Viewer/actions/runs/37486421708",
+    "environment": "Linux CI, software WebGL, synthetic MP4/WebM, native OPFS recovery and 3840x1920 A/B comparison; Floorp on Windows and real GPU/network-drive playback require separate verification"
   }
 }
