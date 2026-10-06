@@ -13,6 +13,13 @@ export function bindInput({
   let dragDepth = 0;
   let tap = null;
   let clickTimer = null;
+  let stepTimer = null;
+  const steppedOnPress = new WeakSet();
+  const stopStepHold = () => {
+    clearTimeout(stepTimer);
+    stepTimer = null;
+    player.stopStepping();
+  };
   const open = () => {
     elements.fileInput.value = "";
     elements.fileInput.click();
@@ -70,13 +77,33 @@ export function bindInput({
     { capture: true },
   );
   life.on(window, "blur", () => {
+    stopStepHold();
     dragDepth = 0;
     elements.dropmask.classList.remove("show");
   });
 
   life.on(elements.playBtn, "click", () => player.toggle());
-  life.on(elements.stepBackBtn, "click", () => player.stepFrames(-1));
-  life.on(elements.stepFwdBtn, "click", () => player.stepFrames(1));
+  for (const [button, direction] of [
+    [elements.stepBackBtn, -1],
+    [elements.stepFwdBtn, 1],
+  ]) {
+    life.on(button, "pointerdown", (event) => {
+      if (event.button !== 0 || button.disabled) return;
+      stopStepHold();
+      steppedOnPress.add(button);
+      player.stepFrames(direction);
+      const repeat = () => {
+        player.stepFrames(direction, { repeat: true });
+        stepTimer = setTimeout(repeat, 60);
+      };
+      stepTimer = setTimeout(repeat, 350);
+    });
+    life.on(button, "click", (event) => {
+      if (event.detail && steppedOnPress.delete(button)) return;
+      player.stepFrames(direction);
+    });
+  }
+  life.on(document, "pointerup pointercancel", stopStepHold);
   life.on(elements.resetViewBtn, "click", view.reset);
   life.on(elements.zoomSlider, "input", () =>
     view.setFov(
@@ -183,16 +210,17 @@ export function bindInput({
     void toggleFullscreen();
   });
   life.on(player, "unload", () => {
+    stopStepHold();
     clearClick();
     tap = null;
   });
 
   const actions = {
     Space: () => player.toggle(),
-    ArrowRight: () => player.stepFrames(1),
-    KeyD: () => player.stepFrames(1),
-    ArrowLeft: () => player.stepFrames(-1),
-    KeyA: () => player.stepFrames(-1),
+    ArrowRight: (event) => player.stepFrames(1, { repeat: event.repeat }),
+    KeyD: (event) => player.stepFrames(1, { repeat: event.repeat }),
+    ArrowLeft: (event) => player.stepFrames(-1, { repeat: event.repeat }),
+    KeyA: (event) => player.stepFrames(-1, { repeat: event.repeat }),
     ArrowUp: () => playlist.navigate(-1),
     KeyW: () => playlist.navigate(-1),
     ArrowDown: () => playlist.navigate(1),
@@ -227,12 +255,17 @@ export function bindInput({
     const action = actions[event.code];
     if (!action) return;
     event.preventDefault();
-    action();
+    action(event);
+  });
+  life.on(window, "keyup", (event) => {
+    if (["ArrowRight", "ArrowLeft", "KeyA", "KeyD"].includes(event.code))
+      player.stopStepping();
   });
   return {
     dispose() {
       life.dispose();
       clearClick();
+      stopStepHold();
     },
   };
 }

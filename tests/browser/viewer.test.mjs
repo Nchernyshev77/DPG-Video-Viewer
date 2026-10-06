@@ -87,8 +87,7 @@ async function ready(page, file) {
 async function waitSeek(page, time) {
   await page.waitForFunction(
     ({ app, value }) =>
-      !app.player.video.seeking &&
-      Math.abs(app.player.currentTime - value) < 0.005,
+      !app.player.seeking && Math.abs(app.player.currentTime - value) < 0.005,
     { app: appHandles.get(page), value: time },
   );
 }
@@ -124,6 +123,155 @@ test("local dependencies, actual MP4 decoding and zero idle redraws", async (t) 
   await page.screenshot({ path: `${root}/test-results/flat.png` });
   t.diagnostic(
     `Paused draws in 500 ms: ${after.drawCount - before.drawCount}; GPU textures: ${after.textures}`,
+  );
+});
+
+test("held steps present decoded pixels under CPU load; pointer release stops repeating", async (t) => {
+  const page = await pageFor(t);
+  const session = await page.context().newCDPSession(page);
+  await session.send("Emulation.setCPUThrottlingRate", { rate: 4 });
+  await ready(page, "flat.mp4");
+  for (const cacheLimit of [2147483648, 0]) {
+    if (!cacheLimit) {
+      await page.locator("#infoBtn").click();
+      const position = await current(page);
+      await page.locator("#cacheLimit").selectOption("0");
+      await waitReady(page);
+      await waitSeek(page, position);
+      await page.locator("#infoBtn").click();
+    }
+    const samples = await page.evaluate(async (app) => {
+      const canvas = app.view.canvas;
+      const gl = canvas.getContext("webgl2") || canvas.getContext("webgl");
+      const pixels = new Uint8Array(64 * 64 * 4);
+      const samples = [];
+      for (let i = 0; i < 18; i++) {
+        document.body.dispatchEvent(
+          new KeyboardEvent("keydown", {
+            code: "ArrowRight",
+            key: "ArrowRight",
+            repeat: i > 0,
+            bubbles: true,
+          }),
+        );
+        await app.view.drawFrame();
+        gl.readPixels(
+          Math.floor(canvas.width / 2 - 32),
+          Math.floor(canvas.height / 2 - 32),
+          64,
+          64,
+          gl.RGBA,
+          gl.UNSIGNED_BYTE,
+          pixels,
+        );
+        let colored = 0;
+        for (let j = 0; j < pixels.length; j += 4)
+          if (Math.max(pixels[j], pixels[j + 1], pixels[j + 2]) > 50) colored++;
+        samples.push(colored);
+        await new Promise((resolve) => setTimeout(resolve, 15));
+      }
+      document.body.dispatchEvent(
+        new KeyboardEvent("keyup", { code: "ArrowRight", bubbles: true }),
+      );
+      return samples;
+    }, appHandles.get(page));
+    assert.ok(
+      samples.every((count) => count > 100),
+      `Black frame with cache=${cacheLimit}: ${samples}`,
+    );
+    t.diagnostic(
+      `Cache ${cacheLimit ? "on" : "off"}: ${samples.length} non-black decoded frames at 4× CPU slowdown`,
+    );
+  }
+  await page.evaluate((app) => app.player.seekTo(0.5), appHandles.get(page));
+  await waitSeek(page, 0.5);
+  await page.locator("#stepFwd").hover();
+  await page.mouse.down();
+  await page.waitForTimeout(800);
+  await page.mouse.up();
+  await page.waitForFunction(
+    (app) => !app.player.seeking,
+    appHandles.get(page),
+  );
+  const stopped = await current(page);
+  assert.ok(
+    stopped > 0.6,
+    "Holding the pointer advances several displayed frames",
+  );
+  await page.waitForTimeout(250);
+  assert.equal(
+    await current(page),
+    stopped,
+    "Pointer release leaves no repeating backlog",
+  );
+  assert.equal(
+    await page.evaluate((app) => app.player.playing, appHandles.get(page)),
+    false,
+  );
+  await page.screenshot({ path: `${root}/test-results/held-step.png` });
+});
+
+test("cached selection avoids rereading files; direct mode preserves position; clear releases the cache", async (t) => {
+  const page = await pageFor(t);
+  await page.evaluate(() => {
+    let reads = 0;
+    const read = FileReader.prototype.readAsArrayBuffer;
+    FileReader.prototype.readAsArrayBuffer = function (...args) {
+      reads++;
+      return read.apply(this, args);
+    };
+    // Test-only counter is held by a getter on the browser's FileReader constructor.
+    Object.defineProperty(FileReader, "testReads", { get: () => reads });
+  });
+  await page
+    .locator("#file")
+    .setInputFiles([`${fixtures}/flat.mp4`, `${fixtures}/vr.mp4`]);
+  await waitReady(page);
+  await page.evaluate((app) => app.playlist.select(0), appHandles.get(page));
+  await waitReady(page);
+  const before = await page.evaluate(() => FileReader.testReads);
+  for (const index of [1, 0, 1, 0]) {
+    await page.evaluate(({ app, index }) => app.playlist.select(index), {
+      app: appHandles.get(page),
+      index,
+    });
+    await waitReady(page);
+  }
+  assert.equal(await page.evaluate(() => FileReader.testReads), before);
+  const cached = await page.evaluate(
+    (app) => ({
+      bytes: app.cache.bytes,
+      size: app.cache.size,
+      cached: app.player.cacheState.mode,
+      independent: app.player.video.src !== app.player.item.url,
+    }),
+    appHandles.get(page),
+  );
+  assert.equal(cached.size, 2);
+  assert.ok(cached.bytes > 0);
+  assert.equal(cached.cached, "cached");
+  assert.equal(cached.independent, true);
+  await page.evaluate((app) => app.player.seekTo(1), appHandles.get(page));
+  await waitSeek(page, 1);
+  await page.locator("#infoBtn").click();
+  await page.screenshot({ path: `${root}/test-results/cache-info.png` });
+  await page.locator("#cacheLimit").selectOption("0");
+  await waitReady(page);
+  await waitSeek(page, 1);
+  assert.equal(
+    await page.evaluate(
+      (app) => app.player.video.src === app.player.item.url,
+      appHandles.get(page),
+    ),
+    true,
+  );
+  await page.evaluate((app) => app.playlist.clear(), appHandles.get(page));
+  assert.deepEqual(
+    await page.evaluate(
+      (app) => ({ bytes: app.cache.bytes, size: app.cache.size }),
+      appHandles.get(page),
+    ),
+    { bytes: 0, size: 0 },
   );
 });
 

@@ -14,6 +14,11 @@ export class VideoPlayer extends EventTarget {
   #scrubWasPlaying = false;
   #sample = null;
   #autoplay = false;
+  #cache;
+  #presentFrame;
+  #seek = null;
+  #pendingSteps = 0;
+  #repeatStep = 0;
 
   video = null;
   item = null;
@@ -24,11 +29,25 @@ export class VideoPlayer extends EventTarget {
   variableFrameRate = false;
   scrubbing = false;
   error = "";
+  cacheState = { mode: "empty", read: 0, total: 0 };
 
-  constructor(container, { readMetadata = readVideoMetadata } = {}) {
+  constructor(
+    container,
+    {
+      readMetadata = readVideoMetadata,
+      cache = null,
+      presentFrame = () => {},
+    } = {},
+  ) {
     super();
     this.#container = container;
     this.#readMetadata = readMetadata;
+    this.#cache = cache;
+    this.#presentFrame = presentFrame;
+  }
+
+  get seeking() {
+    return Boolean(this.#seek || this.video?.seeking);
   }
 
   get playing() {
@@ -59,7 +78,12 @@ export class VideoPlayer extends EventTarget {
     this.dispatchEvent(new CustomEvent(event, { detail }));
   }
 
-  load(item, { autoplay = false } = {}) {
+  #drawFrame() {
+    this.#emit("frame");
+    return this.#presentFrame();
+  }
+
+  load(item, { autoplay = false, startTime = 0, cacheLimit } = {}) {
     this.#generation++;
     this.#stopFrames();
     this.#sourceLife?.dispose();
@@ -79,8 +103,13 @@ export class VideoPlayer extends EventTarget {
     this.variableFrameRate = false;
     this.scrubbing = this.#scrubWasPlaying = false;
     this.#pendingSeek = this.#sample = null;
+    this.#seek = null;
+    this.#pendingSteps = this.#repeatStep = 0;
+    this.cacheState = { mode: "empty", read: 0, total: 0 };
     this.error = "";
     this.#autoplay = autoplay;
+    // Detach the old media before evicting its cached URL.
+    if (cacheLimit !== undefined) this.#cache?.setLimit(cacheLimit);
     if (!item) {
       this.#emit();
       return;
@@ -88,6 +117,30 @@ export class VideoPlayer extends EventTarget {
 
     const generation = this.#generation;
     const life = (this.#sourceLife = createLifecycle());
+    const open = (source) => {
+      if (life.signal.aborted || generation !== this.#generation) return;
+      this.#openSource(item, source, life, generation, startTime);
+    };
+    if (this.#cache) {
+      this.#emit();
+      void this.#cache
+        .prepare(item, life.signal, (state) => {
+          if (life.signal.aborted) return;
+          this.cacheState = state;
+          this.#emit();
+        })
+        .then(open)
+        .catch((error) => {
+          if (!life.signal.aborted) {
+            this.error = "Could not preload the video. Choose another file.";
+            this.loading = false;
+            this.#emit();
+          }
+        });
+    } else open({ url: item.url, file: item.file });
+  }
+
+  #openSource(item, source, life, generation, startTime) {
     // One media element per source makes late events from old sources harmless.
     const video = (this.video = document.createElement("video"));
     video.id = "mediaVideo";
@@ -97,12 +150,23 @@ export class VideoPlayer extends EventTarget {
     video.loop = true;
     video.hidden = true;
     this.#container.append(video);
-    life.on(video, "loadedmetadata durationchange", () => this.#emit());
+    let restoreTime = startTime;
+    life.on(video, "loadedmetadata durationchange", () => {
+      if (restoreTime > 0 && Number.isFinite(video.duration)) {
+        video.currentTime = clamp(
+          restoreTime,
+          0,
+          Math.max(0, video.duration - 0.001),
+        );
+        restoreTime = 0;
+      }
+      this.#emit();
+    });
     life.on(video, "loadeddata", () => {
       this.ready = true;
       this.loading = false;
       this.#emit("ready");
-      this.#emit("frame");
+      void this.#drawFrame();
       this.#emit();
     });
     life.on(video, "canplay", () => {
@@ -119,7 +183,7 @@ export class VideoPlayer extends EventTarget {
     });
     life.on(video, "pause ended", () => {
       this.#stopFrames();
-      this.#emit("frame");
+      void this.#drawFrame();
       this.#emit();
     });
     life.on(video, "timeupdate", () => this.#emit());
@@ -127,23 +191,25 @@ export class VideoPlayer extends EventTarget {
       this.#sample = null;
     });
     life.on(video, "seeked", () => {
-      this.#emit("frame");
-      this.#emit();
-      const pending = this.#pendingSeek;
-      this.#pendingSeek = null;
-      if (pending !== null) this.seekTo(pending);
+      this.#seek ||= { generation, presenting: false };
+      this.#seek.seeked = true;
+      this.#presentSeek();
     });
+    life.on(video, "loadeddata canplay", () => this.#presentSeek());
     life.on(video, "error", () => {
       this.#stopFrames();
+      this.#seek = null;
+      this.#pendingSeek = null;
+      this.#pendingSteps = this.#repeatStep = 0;
       this.ready = this.loading = false;
       this.error =
         "Playback error. This browser may not support the video codec. Choose another file.";
       this.#emit();
     });
-    video.src = item.url;
+    video.src = source.url;
     video.load();
     this.#emit();
-    this.#readMetadata(item.file, life.signal)
+    this.#readMetadata(source.file, life.signal)
       .then((metadata) => {
         if (generation !== this.#generation || life.signal.aborted || !metadata)
           return;
@@ -181,29 +247,85 @@ export class VideoPlayer extends EventTarget {
   seekTo(time) {
     if (!this.ready || !this.video) return;
     const target = clamp(time, 0, this.duration);
-    if (this.video.seeking) {
+    if (this.seeking) {
       this.#pendingSeek = target;
+      this.#pendingSteps = this.#repeatStep = 0;
       return;
     }
     if (Math.abs(this.currentTime - target) < 0.00001) {
       this.#emit();
       return;
     }
+    this.#seek = {
+      generation: this.#generation,
+      seeked: false,
+      presenting: false,
+    };
     this.video.currentTime = target;
     this.#emit();
   }
 
-  stepFrames(count) {
+  #presentSeek() {
+    const seek = this.#seek;
+    if (
+      !seek ||
+      !seek.seeked ||
+      seek.presenting ||
+      this.video.seeking ||
+      this.video.readyState < 2
+    )
+      return;
+    seek.presenting = true;
+    // seeked is not a rendered frame. Keep this seek locked until WebGL uploads it.
+    Promise.resolve(this.#drawFrame()).then(() => {
+      if (this.#seek !== seek || seek.generation !== this.#generation) return;
+      this.#seek = null;
+      const pending = this.#pendingSeek;
+      const steps = this.#pendingSteps || this.#repeatStep;
+      this.#pendingSeek = null;
+      this.#pendingSteps = this.#repeatStep = 0;
+      this.#emit();
+      if (pending !== null) this.seekTo(pending);
+      else if (steps) this.stepFrames(steps);
+    });
+  }
+
+  stopStepping() {
+    this.#repeatStep = 0;
+  }
+
+  reloadCache(limit = this.#cache?.limit) {
+    if (!this.item) {
+      this.#cache?.setLimit(limit);
+      return;
+    }
+    this.load(this.item, {
+      autoplay: this.playing,
+      startTime: this.currentTime,
+      cacheLimit: limit,
+    });
+  }
+
+  stepFrames(count, { repeat = false } = {}) {
     if (!this.ready) return;
     this.pause();
+    if (this.seeking) {
+      // Key auto-repeat may outrun the decoder. Retain one direction, not a backlog.
+      if (repeat) this.#repeatStep = Math.sign(count);
+      else this.#pendingSteps += count;
+      return;
+    }
     if (!this.fps) {
       this.fps = CONFIG.fallbackFps;
       this.fpsSource = "fallback";
     }
     const fps = this.effectiveFPS;
-    const start = this.#pendingSeek ?? this.currentTime;
+    const start = this.currentTime;
     const target = (Math.round(start * fps) + count) / fps;
-    this.seekTo(clamp(target, 0, Math.max(0, this.duration - 0.25 / fps)));
+    const insideFrame = Math.min(0.0001, 0.01 / fps);
+    this.seekTo(
+      clamp(target + insideFrame, 0, Math.max(0, this.duration - 0.25 / fps)),
+    );
   }
 
   jumpToFrame(frame) {
@@ -270,7 +392,7 @@ export class VideoPlayer extends EventTarget {
       this.#frameHandle = this.#fallbackHandle = null;
       if (generation !== this.#generation) return;
       this.#observeFPS(metadata);
-      this.#emit("frame");
+      void this.#drawFrame();
       this.#emit();
       if (this.playing) this.#startFrames();
     };
