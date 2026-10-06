@@ -1,13 +1,13 @@
 <!doctype html>
-<html lang="en">
+<html lang="en" data-version="d1d0db3e630231f0">
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <title>DPG Video Viewer</title>
-    <link rel="stylesheet" href="./styles/base.css" />
-    <link rel="stylesheet" href="./styles/viewer.css" />
-    <link rel="stylesheet" href="./styles/controls.css" />
-    <link rel="stylesheet" href="./styles/panels.css" />
+    <link rel="stylesheet" href="./assets/d1d0db3e630231f0/styles/base.css" />
+    <link rel="stylesheet" href="./assets/d1d0db3e630231f0/styles/viewer.css" />
+    <link rel="stylesheet" href="./assets/d1d0db3e630231f0/styles/controls.css" />
+    <link rel="stylesheet" href="./assets/d1d0db3e630231f0/styles/panels.css" />
   </head>
   <body>
     <div id="app">
@@ -49,6 +49,17 @@
             Drag & Drop a video here or <b>click here</b>.
           </div>
           <progress max="1" value="0" id="progress" hidden></progress>
+          <div id="loadActions" class="load-actions" hidden>
+            <button id="loadStart" class="btn" type="button" hidden>
+              Start video
+            </button>
+            <button id="loadDirect" class="btn" type="button">
+              Open original file
+            </button>
+            <button id="loadRetry" class="btn" type="button" hidden>
+              Retry loading
+            </button>
+          </div>
         </div>
 
         <div id="hud">
@@ -285,6 +296,10 @@
                 Open without preloading
               </button>
             </section>
+            <details id="loadDetailsPanel" hidden>
+              <summary>Loading details</summary>
+              <pre id="loadDetails"></pre>
+            </details>
           </div>
         </aside>
         <div id="plistPanel" role="dialog" aria-label="Playlist">
@@ -315,11 +330,11 @@
     <script type="importmap">
       {
         "imports": {
-          "three": "./vendor/three/three.module.min.js",
-          "three/addons/": "./vendor/three/addons/"
+          "three": "./assets/d1d0db3e630231f0/vendor/three/three.module.min.js",
+          "three/addons/": "./assets/d1d0db3e630231f0/vendor/three/addons/"
         }
       }
     </script>
-    <script type="module" src="./src/main.js"></script>
+    <script type="module" src="./assets/d1d0db3e630231f0/src/main.js"></script>
   </body>
 </html>

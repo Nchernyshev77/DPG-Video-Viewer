@@ -1,0 +1,189 @@
+/* Info panel */
+#infoPanel {
+  position: fixed;
+  top: 52px;
+  width: 320px;
+  max-width: 90vw;
+  background: #101010cc;
+  color: #ddd;
+  border: 1px solid #2a2a2a;
+  border-radius: 12px;
+  box-shadow: 0 10px 30px rgba(0, 0, 0, 0.35);
+  display: none;
+  z-index: var(--z-info, 6);
+}
+#infoPanel.show {
+  display: block;
+}
+#infoPanel header {
+  padding: 0.6rem 0.8rem;
+  border-bottom: 1px solid #222;
+  font-weight: 600;
+}
+#infoPanel .body {
+  padding: 0.6rem 0.8rem;
+  font-size: 0.95rem;
+}
+#infoPanel .body dl {
+  display: grid;
+  grid-template-columns: auto 1fr;
+  gap: 0.35rem 0.75rem;
+  margin: 0;
+}
+#infoPanel .body dt {
+  color: #9aa3ad;
+}
+#infoPanel .body dd {
+  margin: 0;
+}
+.cache-settings {
+  border-top: 1px solid var(--line);
+  margin-top: 0.8rem;
+  padding-top: 0.8rem;
+}
+.cache-settings label,
+.cache-settings select {
+  display: block;
+  width: 100%;
+}
+.cache-settings select {
+  background: #151515;
+  color: var(--text);
+  border: 1px solid #444;
+  border-radius: 6px;
+  padding: 0.4rem;
+  margin-top: 0.4rem;
+}
+.cache-settings p {
+  margin: 0.5rem 0;
+  color: var(--muted);
+}
+#cacheSkip[hidden] {
+  display: none;
+}
+#loadDetailsPanel {
+  border-top: 1px solid var(--line);
+  margin-top: 0.8rem;
+  padding-top: 0.8rem;
+}
+#loadDetails {
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  max-height: 12rem;
+  overflow: auto;
+  font-size: 0.8rem;
+  user-select: text;
+}
+
+/* playlist custom dropdown */
+
+/* make playlist footer button span full width */
+#plistFooter .btn {
+  width: 100%;
+  max-width: none;
+  margin: 0;
+  justify-content: center;
+  box-sizing: border-box;
+}
+
+#plistFooter {
+  display: flex;
+  justify-content: center;
+  padding: 0.5rem 0.6rem;
+  border-top: 1px solid var(--line);
+}
+
+/* playlist footer pinned bottom */
+
+#playlist {
+  display: none;
+}
+#plistPanel {
+  position: fixed;
+  display: none;
+  z-index: var(--z-plist, 5);
+  background: #101010cc;
+  border: 1px solid #2a2a2a;
+  border-radius: 10px;
+  min-width: 260px;
+  max-width: 80vw;
+  max-height: 50vh;
+  overflow: auto;
+  box-shadow: 0 10px 30px rgba(0, 0, 0, 0.35);
+}
+#plistPanel.show {
+  display: block;
+}
+#plistPanel .plItem {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  padding: 0.45rem 0.6rem;
+  border-bottom: 1px solid #1b1b1b;
+  cursor: pointer;
+  transition: background-color 0.12s ease;
+}
+#plistPanel .plItem:hover {
+  background: #1b1b1b;
+}
+#plistPanel .plItem:last-child {
+  border-bottom: 0;
+}
+#plistPanel .name {
+  flex: 1;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+#plistPanel .idx {
+  opacity: 0.6;
+  font-variant-numeric: tabular-nums;
+  width: 2ch;
+}
+#plistPanel .x {
+  background: transparent;
+  border: 1px solid #333;
+  color: #aaa;
+  width: 22px;
+  height: 22px;
+  border-radius: 6px;
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}
+#plistPanel .x:hover {
+  background: #1a1a1a;
+  color: #fff;
+  border-color: #444;
+}
+#plistPanel .active .name {
+  color: #fff;
+  font-weight: 600;
+}
+
+/* hide Prev/Next buttons per request */
+
+#plistDock #infoBtn {
+  display: block;
+  margin-top: 6px;
+}
+
+#plistPanel {
+  min-width: 0;
+}
+#infoPanel {
+  overflow: auto;
+}
+#plistFooter {
+  padding: 0.5rem 0.6rem;
+}
+.playlist-empty {
+  padding: 0.6rem 0.8rem;
+  color: var(--muted);
+}
+#meas {
+  position: absolute;
+  visibility: hidden;
+  white-space: nowrap;
+}

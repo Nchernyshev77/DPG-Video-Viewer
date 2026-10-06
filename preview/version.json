@@ -1,14 +1,20 @@
 {
   "branch": "refactor/modular-viewer",
-  "commit": "e95f0b0fb8d29445b66571a0444406c43e537885",
+  "commit": "41807ad356b551c696f78f5475d84f0141d90b03",
+  "revision": "d1d0db3e630231f0",
   "productionBranch": "main",
   "productionCommit": "b26d5c8be5068f4b9950274e6e0d122b8df39b60",
   "features": [
-    "bounded-preload-cache",
-    "render-acknowledged-frame-stepping"
+    "bounded-file-cache",
+    "rendered-frame-step-queue",
+    "first-frame-recovery",
+    "loading-timeouts",
+    "one-time-original-source-fallback",
+    "versioned-module-graph"
   ],
   "tests": {
-    "unit": 18,
-    "browser": 8
+    "unit": 26,
+    "chromium": 11,
+    "ci": "https://github.com/Nchernyshev77/DPG-Video-Viewer/actions/runs/37455702521"
   }
 }

@@ -1,12 +1,13 @@
 # DPG Video Viewer — GitHub Pages
 
-This publishing branch contains two static versions:
+Original viewer: https://nchernyshev77.github.io/DPG-Video-Viewer/
 
-- `/`: the existing main viewer, copied unchanged from `b26d5c8be5068f4b9950274e6e0d122b8df39b60`. Its index.html blob SHA is unchanged.
-- `/preview/`: the modular viewer from `refactor/modular-viewer`, commit `e95f0b0fb8d29445b66571a0444406c43e537885`.
+Modular preview: https://nchernyshev77.github.io/DPG-Video-Viewer/preview/
 
-The preview restores selected-file preloading with a 2 GiB aggregate LRU budget (configurable in Info). Held frame steps wait for decoded data and an actual WebGL render; repeated keys cannot outrun the display. Source code passed 18 unit and 8 Chromium tests, including 4x CPU throttling with caching on and off: https://github.com/Nchernyshev77/DPG-Video-Viewer/actions/runs/37450721382
+Source: [refactor/modular-viewer](https://github.com/Nchernyshev77/DPG-Video-Viewer/tree/refactor/modular-viewer), draft [PR #1](https://github.com/Nchernyshev77/DPG-Video-Viewer/pull/1).
 
-Neither this publication nor the refactor has been merged into main. GitHub Pages publishes from gh-pages, /(root). The existing viewer remains at the root URL and the test version opens at /preview/. Reload the preview without browser cache after updates (Ctrl+F5).
+Preview commit: `41807ad356b551c696f78f5475d84f0141d90b03`; assets revision: `d1d0db3e630231f0`.
 
-The preview is a tested source snapshot. Its source branch contains architecture and audit documentation. The .nojekyll file serves JavaScript and vendor assets directly.
+The preview includes file preloading, bounded LRU caching, frame stepping that waits for rendered frames, first-frame recovery and loading timeouts. All modules, styles and vendor files share one versioned asset directory; old published paths remain available for existing tabs. See preview/version.json for version and test details.
+
+The root index.html remains the original main viewer (commit b26d5c8be5068f4b9950274e6e0d122b8df39b60). Main is not merged or changed by preview publication.
