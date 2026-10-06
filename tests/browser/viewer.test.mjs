@@ -241,6 +241,59 @@ test("missing loadeddata and metadata-only preload still present a paused first 
   });
 });
 
+test("decoder priming recovers a load stalled before metadata", async (t) => {
+  const page = await pageFor(t);
+  await page.evaluate(() => {
+    const add = EventTarget.prototype.addEventListener;
+    EventTarget.prototype.addEventListener = function (
+      type,
+      listener,
+      options,
+    ) {
+      if (
+        this instanceof HTMLVideoElement &&
+        ["loadedmetadata", "durationchange", "loadeddata"].includes(type)
+      )
+        return;
+      return add.call(this, type, listener, options);
+    };
+    const state = Object.getOwnPropertyDescriptor(
+      HTMLMediaElement.prototype,
+      "readyState",
+    );
+    const play = HTMLMediaElement.prototype.play;
+    const primed = new WeakSet();
+    Object.defineProperty(HTMLMediaElement.prototype, "readyState", {
+      ...state,
+      get() {
+        return primed.has(this) ? state.get.call(this) : 0;
+      },
+    });
+    HTMLMediaElement.prototype.play = function () {
+      primed.add(this);
+      return play.call(this);
+    };
+  });
+  await ready(page, "flat.mp4");
+  const result = await page.evaluate(
+    (app) => ({
+      paused: app.player.video.paused,
+      time: app.player.currentTime,
+      ready: app.player.video.readyState,
+      source: app.player.cacheState.mode,
+      events: app.player.diagnostics().events.map((event) => event.event),
+    }),
+    appHandles.get(page),
+  );
+  assert.equal(result.paused, true);
+  assert.equal(result.time, 0);
+  assert.ok(result.ready >= 2);
+  assert.equal(result.source, "cached");
+  assert.ok(result.events.includes("request-first-frame"));
+  assert.equal(result.events.includes("loadedmetadata"), false);
+  assert.equal(await page.locator("#status").isVisible(), false);
+});
+
 test("a stalled preload can open the original without disabling caching or opening a file picker", async (t) => {
   const page = await pageFor(t);
   let pickers = 0;
@@ -748,6 +801,55 @@ test("playback keeps rendering with stalled or unavailable video-frame callbacks
       `${browserName} ${callbacks} callbacks: ${sample.uploads} WebGL uploads; ${sample.draws} draws`,
     );
   }
+});
+
+test("a stationary VR camera does not consume a residual drag during playback", async (t) => {
+  const page = await pageFor(t);
+  await ready(page, "vr.mp4");
+  const canvas = await page.locator("#viewer canvas").boundingBox();
+  const x = canvas.x + canvas.width / 2,
+    y = canvas.y + canvas.height / 2;
+  await page.mouse.move(x, y);
+  await page.mouse.down();
+  await page.mouse.move(x + 120, y + 90);
+  await page.mouse.up();
+  await page.evaluate(async (app) => {
+    app.player.video.addEventListener(
+      "play",
+      () => {
+        window.cameraAtPlay = app.view.diagnostics().cameraQuaternion;
+      },
+      { once: true },
+    );
+    await app.player.play();
+  }, appHandles.get(page));
+  await page.waitForFunction(() => window.testVideo.currentTime > 0.7);
+  const state = await page.evaluate(
+    (app) => ({
+      initial: window.cameraAtPlay,
+      current: app.view.diagnostics().cameraQuaternion,
+    }),
+    appHandles.get(page),
+  );
+  assert.deepEqual(
+    state.current,
+    state.initial,
+    "Playback must keep the camera fixed after a drag",
+  );
+  await page.mouse.move(x, y);
+  await page.mouse.down();
+  await page.mouse.move(x - 80, y);
+  await page.mouse.up();
+  const rotated = await page.evaluate(
+    (app) => app.view.diagnostics().cameraQuaternion,
+    appHandles.get(page),
+  );
+  assert.notDeepEqual(
+    rotated,
+    state.initial,
+    "Dragging during playback must still rotate the view",
+  );
+  await page.evaluate((app) => app.player.pause(), appHandles.get(page));
 });
 
 test("4K playback compared with the original renderer", async (t) => {

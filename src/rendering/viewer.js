@@ -51,6 +51,7 @@ export function createViewer(
   let contextLost = false;
   let drawCount = 0;
   let playing = false;
+  let interacting = false;
   const frameWaiters = [];
 
   function fitPlane() {
@@ -72,8 +73,10 @@ export function createViewer(
     if (playing) requestRender(true);
     // A seek can temporarily invalidate the video image. Keep the last GPU frame.
     if (video && (video.seeking || video.readyState < 2)) return;
-    // OrbitControls emits change only while its damping is still moving the camera.
-    if (controls.enabled) controls.update();
+    // Preserve the legacy camera freeze during playback. Updating controls with
+    // damping disabled can consume a residual drag and shift a stationary view.
+    if (controls.enabled && (controls.enableDamping || interacting))
+      controls.update();
     if (frameDirty && texture && video?.readyState >= 2)
       texture.needsUpdate = true;
     frameDirty = false;
@@ -122,6 +125,7 @@ export function createViewer(
     texture?.dispose();
     texture = video = null;
     playing = false;
+    interacting = false;
     controls.enabled = false;
     requestRender();
   }
@@ -146,15 +150,26 @@ export function createViewer(
     mode = projectionFor(video.videoWidth, video.videoHeight);
     texture = new THREE.VideoTexture(video);
     texture.colorSpace = THREE.SRGBColorSpace;
-    // Rebuilding mipmaps on every video frame was costly; use linear filtering.
-    texture.generateMipmaps = false;
-    texture.minFilter = texture.magFilter = THREE.LinearFilter;
-    texture.anisotropy = Math.min(4, renderer.capabilities.getMaxAnisotropy());
+    const { videoWidth: width, videoHeight: height } = video;
+    const powerOfTwo = (value) => value > 0 && (value & (value - 1)) === 0;
+    const useMipmaps =
+      powerOfTwo(width) &&
+      powerOfTwo(height) &&
+      width <= 4096 &&
+      height <= 4096;
+    // Keep the original sampling quality, especially near the VR sphere poles.
+    texture.generateMipmaps = useMipmaps;
+    texture.minFilter = useMipmaps
+      ? THREE.LinearMipmapLinearFilter
+      : THREE.LinearFilter;
+    texture.magFilter = THREE.LinearFilter;
+    texture.wrapS = texture.wrapT = THREE.ClampToEdgeWrapping;
+    texture.anisotropy = Math.min(16, renderer.capabilities.getMaxAnisotropy());
     flatMaterial.map = texture;
     flatMaterial.needsUpdate = true;
     if (mode === "vr") {
       if (!sphere) {
-        const geometry = new THREE.SphereGeometry(500, 64, 48);
+        const geometry = new THREE.SphereGeometry(500, 128, 128);
         geometry.scale(-1, 1, 1);
         sphere = new THREE.Mesh(
           geometry,
@@ -179,6 +194,12 @@ export function createViewer(
   }
 
   life.on(controls, "change", () => requestRender());
+  life.on(controls, "start", () => {
+    interacting = true;
+  });
+  life.on(controls, "end", () => {
+    interacting = false;
+  });
   life.on(window, "resize", scheduleResize);
   life.on(document, "visibilitychange", () => {
     if (!document.hidden) requestRender(true);
@@ -240,6 +261,7 @@ export function createViewer(
         textures: renderer.info.memory.textures,
         geometries: renderer.info.memory.geometries,
         mode,
+        cameraQuaternion: camera.quaternion.toArray(),
       };
     },
     dispose() {

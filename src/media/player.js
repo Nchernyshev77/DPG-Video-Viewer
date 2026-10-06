@@ -181,11 +181,12 @@ export class VideoPlayer extends EventTarget {
   #openSource(item, source, life, generation, startTime) {
     // One media element per source makes late events from old sources harmless.
     const video = (this.video = document.createElement("video"));
-    video.id = "mediaVideo";
+    video.crossOrigin = "anonymous";
     video.preload = "auto";
     video.playsInline = true;
     video.muted = true;
     video.loop = true;
+    video.controls = false;
     // The legacy viewer uses a detached media element, consumed only by WebGL.
     // A transparent 1px DOM video can trigger browser visibility optimizations.
     this.#sourceMode = source.mode || "direct";
@@ -366,6 +367,9 @@ export class VideoPlayer extends EventTarget {
     poll = setInterval(checkReady, CONFIG.mediaPollMs);
     video.src = source.url;
     video.load();
+    // Some media loaders can stall before loadedmetadata. Do not make decoder
+    // priming depend on the event whose delivery it is meant to recover.
+    primeTimer = setTimeout(prime, this.#primeDelayMs);
     this.#emit();
     this.#readMetadata(source.file, life.signal)
       .then((metadata) => {

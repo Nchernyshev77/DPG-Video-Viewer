@@ -274,6 +274,35 @@ test("canplay and readiness polling recover a missing loadeddata event without d
   assert.equal(readyEvents, 2);
 });
 
+test("loading primes a decoder stalled before metadata and leaves the first frame paused", async (t) => {
+  t.mock.timers.enable({ apis: ["setTimeout", "setInterval"] });
+  const player = setup(undefined, { primeDelayMs: 20 });
+  t.after(() => player.dispose());
+  player.load(item("waiting-for-headers.mp4"));
+  const video = player.video;
+  assert.equal(video.crossOrigin, "anonymous");
+  let starts = 0;
+  video.play = async () => {
+    starts++;
+    video.paused = false;
+    video.dispatchEvent(new Event("loadeddata"));
+  };
+  video.dispatchEvent(new Event("stalled"));
+  assert.equal(video.readyState, 0);
+  t.mock.timers.tick(20);
+  await settle();
+  assert.equal(starts, 1);
+  assert.equal(player.ready, true);
+  assert.equal(player.loading, false);
+  assert.equal(video.paused, true);
+  assert.equal(player.currentTime, 0);
+  assert.ok(
+    player
+      .diagnostics()
+      .events.some((event) => event.event === "request-first-frame"),
+  );
+});
+
 test("metadata-only loading primes the decoder and restores a paused first frame", async (t) => {
   t.mock.timers.enable({ apis: ["setTimeout", "setInterval"] });
   const player = setup(undefined, { primeDelayMs: 20 });
