@@ -357,6 +357,118 @@ test("a browser that requires a user gesture can start without waiting for ready
   assert.equal(player.playing, true);
 });
 
+test("a suspended Blob with no metadata switches to a cached local file without waiting for the frame deadline", async (t) => {
+  t.mock.timers.enable({ apis: ["setTimeout", "setInterval"] });
+  let backing = "blob",
+    copies = 0,
+    releases = 0,
+    discarded = 0;
+  const cache = {
+    async prepare(source) {
+      return {
+        file: source.file,
+        url: `blob:${backing}`,
+        mode: "cached",
+        backing,
+      };
+    },
+    async materialize() {
+      copies++;
+      backing = "file";
+    },
+    releaseRetired() {
+      releases++;
+    },
+    discard() {
+      discarded++;
+    },
+  };
+  const player = setup(undefined, {
+    cache,
+    cacheMetadataIdleMs: 20,
+    loadTimeoutMs: 1000,
+  });
+  t.after(() => player.dispose());
+  player.load(item("suspended.mp4"));
+  await settle();
+  player.video.networkState = 1;
+  player.video.dispatchEvent(new Event("suspend"));
+  t.mock.timers.tick(20);
+  await settle();
+  assert.equal(copies, 1);
+  assert.equal(releases, 1);
+  assert.equal(discarded, 0);
+  assert.equal(player.video.src, "blob:file");
+  player.video.dispatchEvent(new Event("loadeddata"));
+  assert.equal(player.ready, true);
+  assert.equal(player.video.paused, true);
+  assert.equal(player.diagnostics().source, "cached-file");
+  t.mock.timers.tick(2000);
+  assert.equal(player.ready, true);
+  assert.equal(copies, 1, "There is no retry loop");
+});
+
+test("unavailable local storage falls back promptly and source replacement cancels late recovery", async (t) => {
+  t.mock.timers.enable({ apis: ["setTimeout", "setInterval"] });
+  let finish,
+    discarded = 0,
+    calls = 0;
+  const cache = {
+    async prepare(source) {
+      return {
+        file: source.file,
+        url: `blob:cache-${source.name}`,
+        mode: "cached",
+        backing: "blob",
+      };
+    },
+    materialize() {
+      calls++;
+      if (calls === 1)
+        return Promise.reject(
+          new DOMException("Storage denied", "SecurityError"),
+        );
+      return new Promise((resolve) => {
+        finish = resolve;
+      });
+    },
+    discard() {
+      discarded++;
+    },
+  };
+  const player = setup(undefined, {
+    cache,
+    cacheMetadataIdleMs: 20,
+    loadTimeoutMs: 1000,
+  });
+  t.after(() => player.dispose());
+  player.load(item("fallback.mp4"));
+  await settle();
+  player.video.dispatchEvent(new Event("suspend"));
+  t.mock.timers.tick(20);
+  await settle();
+  assert.equal(player.video.src, "blob:fallback.mp4");
+  assert.equal(discarded, 1);
+  player.video.dispatchEvent(new Event("loadeddata"));
+  assert.equal(player.ready, true);
+  assert.equal(player.cacheState.mode, "fallback");
+  player.load(item("old.mp4"));
+  await settle();
+  player.video.dispatchEvent(new Event("suspend"));
+  t.mock.timers.tick(20);
+  await settle();
+  player.load(item("new.mp4"));
+  await settle();
+  const currentVideo = player.video;
+  currentVideo.dispatchEvent(new Event("loadeddata"));
+  finish();
+  await settle();
+  t.mock.timers.tick(2000);
+  assert.equal(player.video, currentVideo);
+  assert.equal(player.item.name, "new.mp4");
+  assert.equal(player.ready, true);
+});
+
 test("stalled cached media retries the original once, then stops loading with an actionable error", async (t) => {
   t.mock.timers.enable({ apis: ["setTimeout", "setInterval"] });
   let reads = 0,

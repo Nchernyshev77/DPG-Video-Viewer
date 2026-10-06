@@ -1,4 +1,5 @@
 import { CONFIG } from "../config.js";
+import { createFileCache } from "./file-cache.js";
 
 /** Read the selected file into one buffer, as in the original viewer. */
 function readFile(blob, signal, timeoutMs, progress) {
@@ -67,6 +68,8 @@ export class VideoCache {
   #urls;
   #read;
   #readTimeoutMs;
+  #createFile;
+  #writeTimeoutMs;
   limit;
 
   constructor({
@@ -74,11 +77,15 @@ export class VideoCache {
     urls = URL,
     read = readFile,
     readTimeoutMs = CONFIG.cacheReadTimeoutMs,
+    createFile = createFileCache,
+    writeTimeoutMs = CONFIG.cacheWriteTimeoutMs,
   } = {}) {
     this.limit = limit;
     this.#urls = urls;
     this.#read = read;
     this.#readTimeoutMs = readTimeoutMs;
+    this.#createFile = createFile;
+    this.#writeTimeoutMs = writeTimeoutMs;
   }
 
   get bytes() {
@@ -92,8 +99,11 @@ export class VideoCache {
     const entry = this.#entries.get(file);
     if (!entry) return;
     this.#entries.delete(file);
+    entry.copyController?.abort();
     this.#bytes -= file.size;
     this.#urls.revokeObjectURL(entry.url);
+    for (const url of entry.retired || []) this.#urls.revokeObjectURL(url);
+    void entry.remove?.().catch(() => {});
   }
 
   setLimit(bytes) {
@@ -105,8 +115,14 @@ export class VideoCache {
   async prepare(item, signal, progress = () => {}) {
     const original = item.file;
     signal?.throwIfAborted();
-    const report = (mode, read = 0) =>
-      progress({ mode, read, total: original.size, limit: this.limit });
+    const report = (mode, read = 0, backing) =>
+      progress({
+        mode,
+        read,
+        total: original.size,
+        limit: this.limit,
+        ...(backing ? { backing } : {}),
+      });
     const direct = (mode) => {
       report(mode);
       return { url: item.url, file: original, mode };
@@ -117,7 +133,7 @@ export class VideoCache {
     if (existing) {
       this.#entries.delete(original);
       this.#entries.set(original, existing);
-      report("cached", original.size);
+      report("cached", original.size, existing.backing);
       return existing;
     }
     // Evict before reading: old caches must not coexist with a full new file.
@@ -148,16 +164,83 @@ export class VideoCache {
         file,
         url: this.#urls.createObjectURL(file),
         mode: "cached",
+        backing: "blob",
       };
       this.#entries.set(original, entry);
       this.#bytes += original.size;
-      report("cached", original.size);
+      report("cached", original.size, entry.backing);
       return entry;
     } catch (error) {
       if (signal?.aborted || error.name === "AbortError") throw error;
       // Read or allocation failures retain the original disk-backed source.
       return direct("failed");
     }
+  }
+
+  async materialize(item, signal) {
+    signal?.throwIfAborted();
+    const entry = this.#entries.get(item.file);
+    if (!entry) throw new Error("The preloaded copy is no longer cached");
+    if (entry.backing === "file") return entry;
+    const controller = new AbortController();
+    const abort = () => controller.abort(signal.reason);
+    signal?.addEventListener("abort", abort, { once: true });
+    entry.copyController = controller;
+    let rejectCancelled;
+    const cancelled = new Promise((_, reject) => {
+      rejectCancelled = reject;
+    });
+    const onAbort = () => rejectCancelled(controller.signal.reason);
+    controller.signal.addEventListener("abort", onAbort, { once: true });
+    const timer = setTimeout(
+      () =>
+        controller.abort(
+          new DOMException("Local cache copy timed out", "TimeoutError"),
+        ),
+      this.#writeTimeoutMs,
+    );
+    let copy;
+    let accepted = false;
+    try {
+      const operation = Promise.resolve()
+        .then(() => this.#createFile(entry.file, controller.signal))
+        .then(async (result) => {
+          if (
+            controller.signal.aborted ||
+            this.#entries.get(item.file) !== entry
+          ) {
+            await result.remove().catch(() => {});
+            throw (
+              controller.signal.reason ||
+              new DOMException("Cache entry removed", "AbortError")
+            );
+          }
+          return result;
+        });
+      copy = await Promise.race([operation, cancelled]);
+      const url = this.#urls.createObjectURL(copy.file);
+      entry.retired ||= [];
+      entry.retired.push(entry.url);
+      entry.file = copy.file;
+      entry.url = url;
+      entry.backing = "file";
+      entry.remove = copy.remove;
+      accepted = true;
+      return entry;
+    } finally {
+      clearTimeout(timer);
+      signal?.removeEventListener("abort", abort);
+      controller.signal.removeEventListener("abort", onAbort);
+      if (entry.copyController === controller) delete entry.copyController;
+      if (copy && !accepted) await copy.remove().catch(() => {});
+    }
+  }
+
+  // The player calls this only after detaching the previous video source.
+  releaseRetired(file) {
+    const entry = this.#entries.get(file);
+    for (const url of entry?.retired?.splice(0) || [])
+      this.#urls.revokeObjectURL(url);
   }
 
   prune(files) {

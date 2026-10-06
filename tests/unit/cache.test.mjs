@@ -124,6 +124,108 @@ function fakeReader(t) {
   return readers;
 }
 
+test("file-backed recovery preserves cached bytes and releases each source after detachment", async () => {
+  let removals = 0;
+  const { cache, reads, revoked } = setup({
+    createFile: async (blob) => ({
+      file: new File([await blob.arrayBuffer()], "local.mp4", {
+        type: blob.type,
+      }),
+      remove: async () => {
+        removals++;
+      },
+    }),
+  });
+  const source = item("network.mp4");
+  const first = await cache.prepare(source),
+    oldURL = first.url;
+  const local = await cache.materialize(source);
+  assert.equal(local.backing, "file");
+  assert.equal(await local.file.text(), "abcdef");
+  assert.notEqual(local.url, source.url);
+  assert.notEqual(local.url, oldURL);
+  assert.deepEqual(
+    revoked,
+    [],
+    "The old source stays valid until the player detaches it",
+  );
+  assert.equal(cache.bytes, 6);
+  assert.equal(await cache.prepare(source), local);
+  assert.deepEqual(
+    reads,
+    [6],
+    "Recovery and switching back never reread the network file",
+  );
+  cache.releaseRetired(source.file);
+  assert.deepEqual(revoked, [oldURL]);
+  cache.dispose();
+  assert.deepEqual(revoked, [oldURL, local.url]);
+  assert.equal(removals, 1);
+});
+
+test("a hung local-cache writer is bounded; its late result is deleted and never published", async (t) => {
+  t.mock.timers.enable({ apis: ["setTimeout"] });
+  let finish,
+    removals = 0;
+  const { cache, revoked } = setup({
+    writeTimeoutMs: 20,
+    createFile: () =>
+      new Promise((resolve) => {
+        finish = resolve;
+      }),
+  });
+  const source = item("timeout.mp4");
+  const original = await cache.prepare(source);
+  const copying = cache.materialize(source);
+  await new Promise((resolve) => setImmediate(resolve));
+  const rejected = assert.rejects(copying, { name: "TimeoutError" });
+  t.mock.timers.tick(20);
+  await rejected;
+  finish({
+    file: new File(["abcdef"], "late.mp4"),
+    remove: async () => {
+      removals++;
+    },
+  });
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.equal(removals, 1);
+  assert.equal((await cache.prepare(source)).url, original.url);
+  assert.equal(original.backing, "blob");
+  assert.deepEqual(revoked, []);
+  cache.dispose();
+});
+
+test("removing a cache entry cancels a pending local copy and disposes a late file", async () => {
+  let finish,
+    copySignal,
+    removals = 0;
+  const { cache } = setup({
+    createFile: (_, signal) => {
+      copySignal = signal;
+      return new Promise((resolve) => {
+        finish = resolve;
+      });
+    },
+  });
+  const source = item("removed.mp4");
+  await cache.prepare(source);
+  const copying = cache.materialize(source);
+  await new Promise((resolve) => setImmediate(resolve));
+  const rejected = assert.rejects(copying, { name: "AbortError" });
+  cache.prune([]);
+  await rejected;
+  assert.equal(copySignal.aborted, true);
+  finish({
+    file: new File(["abcdef"], "late.mp4"),
+    remove: async () => {
+      removals++;
+    },
+  });
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.equal(removals, 1);
+  assert.equal(cache.size, 0);
+});
+
 test("an unresponsive FileReader is aborted and falls back without publishing partial data", async (t) => {
   t.mock.timers.enable({ apis: ["setTimeout"] });
   const readers = fakeReader(t);

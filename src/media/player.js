@@ -25,6 +25,7 @@ export class VideoPlayer extends EventTarget {
   #startTime = 0;
   #sourceMode = "empty";
   #lastPlaybackUpdate = -Infinity;
+  #cacheMetadataIdleMs;
 
   video = null;
   item = null;
@@ -46,6 +47,7 @@ export class VideoPlayer extends EventTarget {
       presentFrame = () => {},
       loadTimeoutMs = CONFIG.mediaLoadTimeoutMs,
       primeDelayMs = CONFIG.mediaPrimeDelayMs,
+      cacheMetadataIdleMs = CONFIG.cacheMetadataIdleMs,
     } = {},
   ) {
     super();
@@ -54,6 +56,7 @@ export class VideoPlayer extends EventTarget {
     this.#presentFrame = presentFrame;
     this.#loadTimeoutMs = loadTimeoutMs;
     this.#primeDelayMs = primeDelayMs;
+    this.#cacheMetadataIdleMs = cacheMetadataIdleMs;
   }
 
   get seeking() {
@@ -189,7 +192,8 @@ export class VideoPlayer extends EventTarget {
     video.controls = false;
     // The legacy viewer uses a detached media element, consumed only by WebGL.
     // A transparent 1px DOM video can trigger browser visibility optimizations.
-    this.#sourceMode = source.mode || "direct";
+    this.#sourceMode =
+      source.backing === "file" ? "cached-file" : source.mode || "direct";
     this.loadStage = "metadata";
     let restoreTime = startTime;
     let priming = false;
@@ -198,10 +202,12 @@ export class VideoPlayer extends EventTarget {
     let primeTimer;
     let deadline;
     let poll;
+    let cacheTimer;
     const stopLoadingTimers = () => {
       clearTimeout(primeTimer);
       clearTimeout(deadline);
       clearInterval(poll);
+      clearTimeout(cacheTimer);
     };
     life.cleanup(stopLoadingTimers);
     const record = (event) => {
@@ -238,6 +244,50 @@ export class VideoPlayer extends EventTarget {
       this.error = message;
       video.pause();
       this.#emit();
+    };
+    const recoverCache = () => {
+      if (
+        finished ||
+        life.signal.aborted ||
+        this.ready ||
+        video.readyState >= 1
+      )
+        return;
+      if (source.backing === "file" || !this.#cache?.materialize) {
+        record("cached-metadata-unavailable");
+        fail("The cached video did not provide metadata.");
+        return;
+      }
+      finished = true;
+      stopLoadingTimers();
+      record("retry-file-cache");
+      this.loadStage = "local-cache";
+      video.pause();
+      this.#emit();
+      void this.#cache
+        .materialize(item, life.signal)
+        .then(() => {
+          if (life.signal.aborted || generation !== this.#generation) return;
+          record("file-cache-ready");
+          this.load(item, {
+            autoplay: this.#autoplay,
+            startTime,
+            recovery: true,
+          });
+          this.#cache.releaseRetired?.(item.file);
+        })
+        .catch((error) => {
+          if (life.signal.aborted || generation !== this.#generation) return;
+          record("file-cache-unavailable");
+          record("retry-original");
+          this.load(item, {
+            autoplay: this.#autoplay,
+            startTime,
+            direct: true,
+            recovery: true,
+          });
+          this.#cache.discard?.(item.file);
+        });
     };
     const checkReady = () => {
       if (
@@ -304,6 +354,7 @@ export class VideoPlayer extends EventTarget {
       (event) => record(event.type),
     );
     life.on(video, "loadedmetadata durationchange", () => {
+      clearTimeout(cacheTimer);
       if (restoreTime > 0 && Number.isFinite(video.duration)) {
         video.currentTime = clamp(
           restoreTime,
@@ -318,6 +369,16 @@ export class VideoPlayer extends EventTarget {
       if (!this.ready && !finished && !primed && !primeTimer)
         primeTimer = setTimeout(prime, this.#primeDelayMs);
       this.#emit();
+    });
+    life.on(video, "suspend stalled", () => {
+      if (
+        !finished &&
+        !this.ready &&
+        source.mode === "cached" &&
+        video.readyState === 0 &&
+        !cacheTimer
+      )
+        cacheTimer = setTimeout(recoverCache, this.#cacheMetadataIdleMs);
     });
     life.on(
       video,

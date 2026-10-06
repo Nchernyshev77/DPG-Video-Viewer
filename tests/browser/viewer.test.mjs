@@ -127,6 +127,141 @@ async function waitSeek(page, time) {
   );
 }
 
+async function suspendMemoryCache(page, unavailable = false) {
+  await page.evaluate((unavailable) => {
+    const blocked = new Set();
+    const create = URL.createObjectURL;
+    URL.createObjectURL = function (value) {
+      const url = create.call(this, value);
+      if (!(value instanceof File)) blocked.add(url);
+      else if (value.name !== "flat.mp4") window.localCacheName = value.name;
+      return url;
+    };
+    window.originalReads = 0;
+    const read = FileReader.prototype.readAsArrayBuffer;
+    FileReader.prototype.readAsArrayBuffer = function (...args) {
+      window.originalReads++;
+      return read.apply(this, args);
+    };
+    const state = Object.getOwnPropertyDescriptor(
+      HTMLMediaElement.prototype,
+      "readyState",
+    );
+    Object.defineProperty(HTMLMediaElement.prototype, "readyState", {
+      ...state,
+      get() {
+        return blocked.has(this.src) ? 0 : state.get.call(this);
+      },
+    });
+    const add = EventTarget.prototype.addEventListener;
+    EventTarget.prototype.addEventListener = function (
+      type,
+      listener,
+      options,
+    ) {
+      if (
+        this instanceof HTMLVideoElement &&
+        [
+          "loadedmetadata",
+          "durationchange",
+          "loadeddata",
+          "canplay",
+          "canplaythrough",
+        ].includes(type)
+      ) {
+        const original = listener;
+        listener = function (event) {
+          if (!blocked.has(this.src)) original.call(this, event);
+        };
+      }
+      return add.call(this, type, listener, options);
+    };
+    if (unavailable)
+      navigator.storage.getDirectory = async () => {
+        throw new DOMException("Private storage unavailable", "SecurityError");
+      };
+  }, unavailable);
+}
+
+test("suspended memory cache decodes from an OPFS File without rereading the selected file", async (t) => {
+  const page = await pageFor(t);
+  await suspendMemoryCache(page);
+  await ready(page, "flat.mp4");
+  const result = await page.evaluate(
+    (app) => ({
+      diagnostics: app.player.diagnostics(),
+      reads: window.originalReads,
+      size: app.cache.size,
+      name: window.localCacheName,
+      original: app.player.video.src === app.player.item.url,
+    }),
+    appHandles.get(page),
+  );
+  assert.equal(result.diagnostics.source, "cached-file");
+  assert.equal(result.diagnostics.cache.backing, "file");
+  assert.equal(result.reads, 1);
+  assert.equal(result.size, 1);
+  assert.equal(result.original, false);
+  assert.ok(result.name);
+  assert.ok(
+    result.diagnostics.events.some(({ event }) => event === "file-cache-ready"),
+  );
+  assert.ok(
+    !result.diagnostics.events.some(({ event }) =>
+      ["first-frame-timeout", "retry-original"].includes(event),
+    ),
+  );
+  await page.evaluate(
+    (app) => app.player.load(app.player.item),
+    appHandles.get(page),
+  );
+  await waitReady(page);
+  assert.equal(await page.evaluate(() => window.originalReads), 1);
+  await page.evaluate((app) => app.playlist.clear(), appHandles.get(page));
+  await page.waitForFunction(() => !window.testVideo);
+  const removed = await page.evaluate(async () => {
+    const root = await navigator.storage.getDirectory();
+    const dir = await root.getDirectoryHandle("dpg-video-cache");
+    for (let attempt = 0; attempt < 40; attempt++) {
+      try {
+        await dir.getFileHandle(window.localCacheName);
+      } catch (error) {
+        if (error.name === "NotFoundError") return true;
+        throw error;
+      }
+      await new Promise((resolve) => setTimeout(resolve, 50));
+    }
+    return false;
+  });
+  assert.equal(
+    removed,
+    true,
+    "Removing the item deletes the private cached file",
+  );
+});
+
+test("unavailable private storage promptly opens the original after a cached header stall", async (t) => {
+  const page = await pageFor(t);
+  await suspendMemoryCache(page, true);
+  await ready(page, "flat.mp4");
+  const result = await page.evaluate(
+    (app) => ({ diagnostics: app.player.diagnostics(), size: app.cache.size }),
+    appHandles.get(page),
+  );
+  assert.equal(result.diagnostics.source, "fallback");
+  assert.equal(result.size, 0);
+  assert.ok(
+    result.diagnostics.events.some(
+      ({ event }) => event === "file-cache-unavailable",
+    ),
+  );
+  assert.ok(
+    !result.diagnostics.events.some(
+      ({ event }) => event === "first-frame-timeout",
+    ),
+  );
+});
+
 test("local dependencies, actual MP4 decoding and zero idle redraws", async (t) => {
   const page = await pageFor(t);
   const external = [];

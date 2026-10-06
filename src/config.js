@@ -10,6 +10,8 @@ export const CONFIG = Object.freeze({
   fallbackFps: 30,
   cacheBytes: 2 * 1024 ** 3,
   cacheReadTimeoutMs: 60_000,
+  cacheWriteTimeoutMs: 15_000,
+  cacheMetadataIdleMs: 1500,
   mediaLoadTimeoutMs: 45_000,
   mediaPrimeDelayMs: 750,
   mediaPollMs: 200,

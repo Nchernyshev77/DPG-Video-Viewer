@@ -29,9 +29,11 @@ export function createApp() {
       (player.loading
         ? player.cacheState.mode === "reading"
           ? `Preloading: ${player.item.name} — ${Math.round((100 * player.cacheState.read) / Math.max(1, player.cacheState.total))}%`
-          : player.loadStage === "gesture"
-            ? "Press Start video to load the first frame."
-            : `${player.loadStage === "frame" ? "Loading first frame" : "Opening video"}: ${player.item.name}`
+          : player.loadStage === "local-cache"
+            ? "Preparing a local video copy…"
+            : player.loadStage === "gesture"
+              ? "Press Start video to load the first frame."
+              : `${player.loadStage === "frame" ? "Loading first frame" : "Opening video"}: ${player.item.name}`
         : !player.item
           ? "Drag & Drop a video here or click here."
           : "");
@@ -64,7 +66,7 @@ export function createApp() {
     elements.cacheSkip.hidden = cacheMode !== "reading";
     const cacheStatus =
       cacheMode === "cached"
-        ? `Preloaded: ${(player.cacheState.total / 1024 ** 2).toFixed(1)} MB. Cache: ${(cache.bytes / 1024 ** 2).toFixed(1)} MB.`
+        ? `Preloaded: ${(player.cacheState.total / 1024 ** 2).toFixed(1)} MB. Cache: ${(cache.bytes / 1024 ** 2).toFixed(1)} MB.${player.cacheState.backing === "file" ? " Playing a local cached file." : ""}`
         : cacheMode === "reading"
           ? "Preloading the selected file. You can open it directly below."
           : cacheMode === "oversized"
