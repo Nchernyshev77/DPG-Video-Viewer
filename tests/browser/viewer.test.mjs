@@ -24,8 +24,11 @@ const current = (page) =>
   );
 
 before(async () => {
-  await mkdir(`${root}/test-results/tmp`, { recursive: true });
-  process.env.TMPDIR = `${root}/test-results/tmp`;
+  const taskTemp = process.env.RUNNER_TEMP
+    ? `${process.env.RUNNER_TEMP}/dpg-viewer`
+    : `${root}/test-results/tmp`;
+  await mkdir(taskTemp, { recursive: true });
+  process.env.TMPDIR = taskTemp;
   await readFile(`${fixtures}/flat.mp4`); // Generate fixtures first with npm run test:fixtures.
   browser = await (browserName === "firefox" ? firefox : chromium).launch({
     headless: process.env.DPG_HEADLESS !== "false",
