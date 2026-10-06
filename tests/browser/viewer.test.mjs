@@ -17,7 +17,9 @@ const listen = (server) =>
   new Promise((resolve) => server.listen(0, "127.0.0.1", resolve));
 const current = (page) =>
   page.evaluate(
-    async () => (await import("./src/main.js")).app.player.currentTime,
+    async () =>
+      (await import(document.querySelector("script[type=module][src]").src)).app
+        .player.currentTime,
   );
 
 before(async () => {
@@ -34,8 +36,11 @@ before(async () => {
       "--disable-dev-shm-usage",
     ],
   });
-  server = createStaticServer({ root });
-  subpathServer = createStaticServer({ root, basePath: "/DPG-Video-Viewer/" });
+  server = createStaticServer({ root: `${root}/dist` });
+  subpathServer = createStaticServer({
+    root: `${root}/dist`,
+    basePath: "/DPG-Video-Viewer/",
+  });
   await listen(server);
   await listen(subpathServer);
   origin = `http://127.0.0.1:${server.address().port}`;
@@ -67,7 +72,9 @@ async function pageFor(t, url = origin, options = {}) {
     Boolean(document.querySelector("#viewer canvas")),
   );
   const handle = await page.evaluateHandle(
-    async () => (await import("./src/main.js")).app,
+    async () =>
+      (await import(document.querySelector("script[type=module][src]").src))
+        .app,
   );
   assert.equal(await page.evaluate((app) => Boolean(app), handle), true);
   appHandles.set(page, handle);
@@ -110,20 +117,180 @@ test("local dependencies, actual MP4 decoding and zero idle redraws", async (t) 
   );
   await page.waitForTimeout(350);
   const before = await page.evaluate(async () =>
-    (await import("./src/main.js")).app.view.diagnostics(),
+    (
+      await import(document.querySelector("script[type=module][src]").src)
+    ).app.view.diagnostics(),
   );
   await page.waitForTimeout(500);
   const after = await page.evaluate(async () =>
-    (await import("./src/main.js")).app.view.diagnostics(),
+    (
+      await import(document.querySelector("script[type=module][src]").src)
+    ).app.view.diagnostics(),
   );
   assert.equal(after.drawCount, before.drawCount);
   assert.equal(after.textures, 1);
   assert.equal(after.mode, "flat");
   assert.deepEqual(external, []);
+  const revision = await page.locator("html").getAttribute("data-version");
+  assert.match(revision, /^[a-f0-9]{16}$/);
+  const staleAssets = await page.evaluate(
+    (revision) =>
+      performance
+        .getEntriesByType("resource")
+        .map((entry) => entry.name)
+        .filter(
+          (url) =>
+            /\.(js|css)$/.test(url) && !url.includes(`/assets/${revision}/`),
+        ),
+    revision,
+  );
+  assert.deepEqual(
+    staleAssets,
+    [],
+    "Every module and stylesheet belongs to the same release",
+  );
   await page.screenshot({ path: `${root}/test-results/flat.png` });
   t.diagnostic(
     `Paused draws in 500 ms: ${after.drawCount - before.drawCount}; GPU textures: ${after.textures}`,
   );
+});
+
+test("missing loadeddata and metadata-only preload still present a paused first frame", async (t) => {
+  const page = await pageFor(t);
+  await page.evaluate(() => {
+    const add = EventTarget.prototype.addEventListener;
+    EventTarget.prototype.addEventListener = function (
+      type,
+      listener,
+      options,
+    ) {
+      if (this instanceof HTMLVideoElement && type === "loadeddata") return;
+      return add.call(this, type, listener, options);
+    };
+    const state = Object.getOwnPropertyDescriptor(
+      HTMLMediaElement.prototype,
+      "readyState",
+    );
+    const play = HTMLMediaElement.prototype.play;
+    const primed = new WeakSet();
+    Object.defineProperty(HTMLMediaElement.prototype, "readyState", {
+      ...state,
+      get() {
+        return primed.has(this)
+          ? state.get.call(this)
+          : Math.min(1, state.get.call(this));
+      },
+    });
+    HTMLMediaElement.prototype.play = function () {
+      primed.add(this);
+      return play.call(this);
+    };
+  });
+  await ready(page, "flat.mp4");
+  await waitSeek(page, 0);
+  await page.evaluate((app) => app.view.drawFrame(), appHandles.get(page));
+  const result = await page.evaluate(
+    (app) => ({
+      diagnostics: app.player.diagnostics(),
+      paused: app.player.video.paused,
+      textures: app.view.diagnostics().textures,
+    }),
+    appHandles.get(page),
+  );
+  assert.equal(result.paused, true);
+  assert.equal(result.textures, 1);
+  assert.equal(result.diagnostics.width, 320);
+  assert.equal(
+    result.diagnostics.events.some((event) => event.event === "loadeddata"),
+    false,
+  );
+  assert.equal(
+    result.diagnostics.events.some(
+      (event) => event.event === "request-first-frame",
+    ),
+    true,
+  );
+  assert.equal(await page.locator("#status").isVisible(), false);
+  await page.screenshot({
+    path: `${root}/test-results/first-frame-recovery.png`,
+  });
+});
+
+test("a stalled preload can open the original without disabling caching or opening a file picker", async (t) => {
+  const page = await pageFor(t);
+  let pickers = 0;
+  page.on("filechooser", () => pickers++);
+  await page.evaluate(() => {
+    window.originalReader = FileReader;
+    window.FileReader = class extends FileReader {
+      readAsArrayBuffer() {}
+    };
+  });
+  await page.locator("#file").setInputFiles(`${fixtures}/flat.mp4`);
+  await page.waitForFunction(
+    (app) => app.player.cacheState.mode === "reading",
+    appHandles.get(page),
+  );
+  assert.equal(await page.locator("#loadDirect").isVisible(), true);
+  await page.screenshot({ path: `${root}/test-results/loading-actions.png` });
+  await page.locator("#loadDirect").focus();
+  await page.keyboard.press("Enter");
+  await waitReady(page);
+  assert.equal(pickers, 0);
+  assert.equal(await page.locator("#cacheLimit").inputValue(), "2147483648");
+  assert.equal(
+    await page.evaluate(
+      (app) => app.player.cacheState.mode,
+      appHandles.get(page),
+    ),
+    "bypassed",
+  );
+  await page.evaluate(() => {
+    window.FileReader = window.originalReader;
+  });
+  await ready(page, "vr.mp4");
+  assert.equal(
+    await page.evaluate(
+      (app) => app.player.cacheState.mode,
+      appHandles.get(page),
+    ),
+    "cached",
+  );
+});
+
+test("an unreadable cached media URL automatically retries the original file", async (t) => {
+  const page = await pageFor(t);
+  await page.evaluate(() => {
+    const create = URL.createObjectURL.bind(URL);
+    let calls = 0;
+    URL.createObjectURL = (file) => {
+      calls++;
+      return create(
+        calls === 2
+          ? new Blob(["damaged cached media"], { type: "video/mp4" })
+          : file,
+      );
+    };
+  });
+  await ready(page, "flat.mp4");
+  const result = await page.evaluate(
+    (app) => ({
+      mode: app.player.cacheState.mode,
+      original: app.player.video.src === app.player.item.url,
+      bytes: app.cache.bytes,
+      limit: app.cache.limit,
+      diagnostics: app.player.diagnostics(),
+    }),
+    appHandles.get(page),
+  );
+  assert.equal(result.mode, "fallback");
+  assert.equal(result.original, true);
+  assert.equal(result.bytes, 0);
+  assert.equal(result.limit, 2147483648);
+  assert.ok(
+    result.diagnostics.events.some((event) => event.event === "retry-original"),
+  );
+  assert.equal(await page.locator("#status").isVisible(), false);
 });
 
 test("held steps present decoded pixels under CPU load; pointer release stops repeating", async (t) => {
@@ -332,7 +499,9 @@ test("playlist duplicates, literal filenames, rapid switching and GPU resource c
   );
   for (let i = 0; i < 12; i++) {
     await page.evaluate(async (index) => {
-      (await import("./src/main.js")).app.playlist.select(index);
+      (
+        await import(document.querySelector("script[type=module][src]").src)
+      ).app.playlist.select(index);
     }, i % 2);
     await waitReady(page);
     await page.waitForTimeout(35);
@@ -343,13 +512,17 @@ test("playlist duplicates, literal filenames, rapid switching and GPU resource c
   );
   await page.screenshot({ path: `${root}/test-results/vr.png` });
   const memory = await page.evaluate(async () =>
-    (await import("./src/main.js")).app.view.diagnostics(),
+    (
+      await import(document.querySelector("script[type=module][src]").src)
+    ).app.view.diagnostics(),
   );
   assert.equal(memory.textures, 1);
   assert.ok(memory.geometries <= 2);
   await page.locator('.plItem[data-idx="0"] .x').click();
   await page.evaluate(async () => {
-    (await import("./src/main.js")).app.playlist.select(1);
+    (
+      await import(document.querySelector("script[type=module][src]").src)
+    ).app.playlist.select(1);
   });
   await waitReady(page);
   assert.equal(
@@ -365,7 +538,9 @@ test("playlist duplicates, literal filenames, rapid switching and GPU resource c
   assert.equal(
     await page.evaluate(
       async () =>
-        (await import("./src/main.js")).app.view.diagnostics().textures,
+        (
+          await import(document.querySelector("script[type=module][src]").src)
+        ).app.view.diagnostics().textures,
     ),
     0,
   );
@@ -375,7 +550,9 @@ test("drop after clearing, decoding error and recovery with WebM", async (t) => 
   const page = await pageFor(t);
   await ready(page, "flat.mp4");
   await page.evaluate(async () =>
-    (await import("./src/main.js")).app.playlist.clear(),
+    (
+      await import(document.querySelector("script[type=module][src]").src)
+    ).app.playlist.clear(),
   );
   const bytes = [...(await readFile(`${fixtures}/flat.mp4`))];
   await page.evaluate((data) => {

@@ -43,9 +43,14 @@ export function bindInput({
   });
   life.on(elements.status, "click", (event) => {
     event.stopPropagation();
+    if (event.target.closest("button")) return;
     open();
   });
   life.on(elements.status, "keydown", (event) => {
+    if (event.target !== elements.status) {
+      event.stopPropagation();
+      return;
+    }
     if (event.key === "Enter" || event.key === " ") {
       event.preventDefault();
       event.stopPropagation();

@@ -61,6 +61,19 @@
 #cacheSkip[hidden] {
   display: none;
 }
+#loadDetailsPanel {
+  border-top: 1px solid var(--line);
+  margin-top: 0.8rem;
+  padding-top: 0.8rem;
+}
+#loadDetails {
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  max-height: 12rem;
+  overflow: auto;
+  font-size: 0.8rem;
+  user-select: text;
+}
 
 /* playlist custom dropdown */
 

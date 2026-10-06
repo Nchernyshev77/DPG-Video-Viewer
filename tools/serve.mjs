@@ -25,7 +25,9 @@ export function createStaticServer({ root = repoRoot, basePath = "/" } = {}) {
       );
       if (!pathname.startsWith(basePath)) throw new Error("Not found");
       const path = pathname.slice(basePath.length) || "index.html";
-      if (!(path === "index.html" || /^(src|styles|vendor)\//.test(path)))
+      if (
+        !(path === "index.html" || /^(src|styles|vendor|assets)\//.test(path))
+      )
         throw new Error("Not found");
       const file = resolve(root, path);
       if (relative(root, file).startsWith("..") || !(await stat(file)).isFile())

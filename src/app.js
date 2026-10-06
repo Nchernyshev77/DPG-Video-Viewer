@@ -29,7 +29,9 @@ export function createApp() {
       (player.loading
         ? player.cacheState.mode === "reading"
           ? `Preloading: ${player.item.name} — ${Math.round((100 * player.cacheState.read) / Math.max(1, player.cacheState.total))}%`
-          : `Loading: ${player.item.name}`
+          : player.loadStage === "gesture"
+            ? "Press Start video to load the first frame."
+            : `${player.loadStage === "frame" ? "Loading first frame" : "Opening video"}: ${player.item.name}`
         : !player.item
           ? "Drag & Drop a video here or click here."
           : "");
@@ -38,6 +40,25 @@ export function createApp() {
       elements.progress.value =
         player.cacheState.read / Math.max(1, player.cacheState.total);
     const cacheMode = player.cacheState.mode;
+    const showActions = Boolean(
+      player.item && (player.loading || player.error),
+    );
+    elements.loadActions.hidden = !showActions;
+    elements.loadStart.hidden = !player.loading || !player.video;
+    elements.loadDirect.hidden = !["reading", "cached", "failed"].includes(
+      cacheMode,
+    );
+    elements.loadRetry.hidden = !player.error;
+    elements.loadDetailsPanel.hidden = !player.item;
+    if (elements.loadDetailsPanel.open) updateDiagnostics();
+    // The empty state is a file picker; loading/error actions are native buttons.
+    if (player.item) {
+      elements.status.removeAttribute("role");
+      elements.status.removeAttribute("tabindex");
+    } else {
+      elements.status.setAttribute("role", "button");
+      elements.status.setAttribute("tabindex", "0");
+    }
     if (elements.cacheLimit.value !== String(cache.limit))
       elements.cacheLimit.value = String(cache.limit);
     elements.cacheSkip.hidden = cacheMode !== "reading";
@@ -50,9 +71,13 @@ export function createApp() {
             ? "File exceeds the cache limit; playing directly from disk."
             : cacheMode === "failed"
               ? "Preloading failed; playing directly from disk."
-              : cacheMode === "disabled"
-                ? "Preloading off; playing directly from disk."
-                : "Files are preloaded when selected. Least recently used files are released at the limit.";
+              : cacheMode === "fallback"
+                ? "The cached copy did not open. Using the original file; cache limit is unchanged."
+                : cacheMode === "bypassed"
+                  ? "This file is opened directly. Preloading stays enabled for other files."
+                  : cacheMode === "disabled"
+                    ? "Preloading off; playing directly from disk."
+                    : "Files are preloaded when selected. Least recently used files are released at the limit.";
     if (cacheStatus !== lastCacheStatus) {
       elements.cacheStatus.textContent = cacheStatus;
       lastCacheStatus = cacheStatus;
@@ -65,6 +90,18 @@ export function createApp() {
     elements.status.setAttribute("aria-label", message || "Choose a video");
     if (!message && document.activeElement === elements.status)
       elements.status.blur();
+  }
+
+  function updateDiagnostics() {
+    elements.loadDetails.textContent = JSON.stringify(
+      {
+        version: document.documentElement.dataset.version,
+        browser: navigator.userAgent,
+        ...player.diagnostics(),
+      },
+      null,
+      2,
+    );
   }
 
   const onError = (message) => {
@@ -92,7 +129,11 @@ export function createApp() {
   life.on(elements.cacheLimit, "change", () =>
     player.reloadCache(Number(elements.cacheLimit.value)),
   );
-  life.on(elements.cacheSkip, "click", () => player.reloadCache(0));
+  life.on(elements.cacheSkip, "click", () => player.retry({ direct: true }));
+  life.on(elements.loadDirect, "click", () => player.retry({ direct: true }));
+  life.on(elements.loadRetry, "click", () => player.retry());
+  life.on(elements.loadStart, "click", () => void player.play());
+  life.on(elements.loadDetailsPanel, "toggle", updateDiagnostics);
 
   life.on(playlist, "change", (event) => {
     if (event.detail.selectionChanged) {

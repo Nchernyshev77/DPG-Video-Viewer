@@ -1,12 +1,33 @@
 import { CONFIG } from "../config.js";
 
 /** Read one bounded chunk; source replacement can stop a slow network read. */
-function readChunk(blob, signal) {
+function readChunk(blob, signal, timeoutMs) {
   return new Promise((resolve, reject) => {
     signal?.throwIfAborted();
     const reader = new FileReader();
-    const abort = () => reader.abort();
-    const cleanup = () => signal?.removeEventListener("abort", abort);
+    let timer;
+    let finished = false;
+    const cleanup = () => {
+      finished = true;
+      clearTimeout(timer);
+      signal?.removeEventListener("abort", abort);
+    };
+    const abort = () => {
+      cleanup();
+      reject(
+        signal?.reason || new DOMException("Read cancelled", "AbortError"),
+      );
+      reader.abort();
+    };
+    const watch = () => {
+      if (finished) return;
+      clearTimeout(timer);
+      timer = setTimeout(() => {
+        cleanup();
+        reject(new DOMException("File read made no progress", "TimeoutError"));
+        reader.abort();
+      }, timeoutMs);
+    };
     reader.onload = () => {
       cleanup();
       resolve(reader.result);
@@ -21,8 +42,15 @@ function readChunk(blob, signal) {
         signal?.reason || new DOMException("Read cancelled", "AbortError"),
       );
     };
+    reader.onprogress = watch;
     signal?.addEventListener("abort", abort, { once: true });
-    reader.readAsArrayBuffer(blob);
+    watch();
+    try {
+      reader.readAsArrayBuffer(blob);
+    } catch (error) {
+      cleanup();
+      reject(error);
+    }
   });
 }
 
@@ -33,6 +61,7 @@ export class VideoCache {
   #urls;
   #read;
   #chunkBytes;
+  #readTimeoutMs;
   limit;
 
   constructor({
@@ -40,11 +69,13 @@ export class VideoCache {
     urls = URL,
     read = readChunk,
     chunkBytes = CONFIG.cacheChunkBytes,
+    readTimeoutMs = CONFIG.cacheReadTimeoutMs,
   } = {}) {
     this.limit = limit;
     this.#urls = urls;
     this.#read = read;
     this.#chunkBytes = chunkBytes;
+    this.#readTimeoutMs = readTimeoutMs;
   }
 
   get bytes() {
@@ -95,7 +126,11 @@ export class VideoCache {
       for (let offset = 0; offset < original.size; offset += this.#chunkBytes) {
         signal?.throwIfAborted();
         const end = Math.min(original.size, offset + this.#chunkBytes);
-        const buffer = await this.#read(original.slice(offset, end), signal);
+        const buffer = await this.#read(
+          original.slice(offset, end),
+          signal,
+          this.#readTimeoutMs,
+        );
         signal?.throwIfAborted();
         // Blob parts avoid staging a second file-sized ArrayBuffer at completion.
         parts.push(new Blob([buffer]));
@@ -126,6 +161,10 @@ export class VideoCache {
     const retained = new Set(files);
     for (const file of this.#entries.keys())
       if (!retained.has(file)) this.#remove(file);
+  }
+
+  discard(file) {
+    this.#remove(file);
   }
 
   dispose() {

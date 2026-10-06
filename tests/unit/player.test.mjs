@@ -9,10 +9,15 @@ class FakeVideo extends EventTarget {
   videoWidth = 320;
   videoHeight = 180;
   ended = false;
-  readyState = 4;
+  readyState = 0;
+  networkState = 2;
   callbacks = new Map();
   requests = 0;
   time = 0;
+  dispatchEvent(event) {
+    if (event.type === "loadeddata") this.readyState = 4;
+    return super.dispatchEvent(event);
+  }
   set currentTime(value) {
     this.time = value;
     this.seeking = true;
@@ -38,6 +43,7 @@ class FakeVideo extends EventTarget {
   load() {}
   remove() {}
   removeAttribute() {}
+  setAttribute() {}
   requestVideoFrameCallback(fn) {
     const id = this.callbacks.size + 1;
     this.callbacks.set(id, fn);
@@ -215,4 +221,183 @@ test("source replacement aborts a slow preload and ignores its late completion",
   assert.equal(player.video, current);
   assert.equal(player.item.name, "new.mp4");
   player.dispose();
+});
+
+test("canplay and readiness polling recover a missing loadeddata event without duplicate ready events", async (t) => {
+  t.mock.timers.enable({ apis: ["setTimeout", "setInterval"] });
+  const player = setup();
+  t.after(() => player.dispose());
+  let readyEvents = 0;
+  player.addEventListener("ready", () => readyEvents++);
+  player.load(item("canplay.mp4"));
+  player.video.readyState = 1;
+  player.video.dispatchEvent(new Event("loadedmetadata"));
+  assert.equal(player.ready, false, "Metadata alone is not a decoded frame");
+  player.video.readyState = 4;
+  player.video.dispatchEvent(new Event("canplay"));
+  player.video.dispatchEvent(new Event("loadeddata"));
+  assert.equal(readyEvents, 1);
+  player.load(item("no-events.mp4"));
+  player.video.readyState = 2;
+  t.mock.timers.tick(200);
+  assert.equal(player.ready, true);
+  assert.equal(player.loading, false);
+  assert.equal(readyEvents, 2);
+});
+
+test("metadata-only loading primes the decoder and restores a paused first frame", async (t) => {
+  t.mock.timers.enable({ apis: ["setTimeout", "setInterval"] });
+  const player = setup(undefined, { primeDelayMs: 20 });
+  t.after(() => player.dispose());
+  player.load(item("metadata-only.mp4"));
+  const video = player.video;
+  let starts = 0;
+  video.play = async () => {
+    starts++;
+    video.paused = false;
+    video.time = 0.1;
+    video.dispatchEvent(new Event("loadeddata"));
+  };
+  video.readyState = 1;
+  video.dispatchEvent(new Event("loadedmetadata"));
+  t.mock.timers.tick(20);
+  await settle();
+  assert.equal(starts, 1);
+  assert.equal(video.paused, true);
+  assert.equal(player.currentTime, 0);
+  assert.equal(player.ready, false, "Wait for the restored position to decode");
+  video.completeSeek();
+  await settle();
+  assert.equal(player.ready, true);
+  assert.equal(player.playing, false);
+  assert.equal(player.error, "");
+});
+
+test("a browser that requires a user gesture can start without waiting for ready", async (t) => {
+  t.mock.timers.enable({ apis: ["setTimeout", "setInterval"] });
+  const player = setup(undefined, { primeDelayMs: 20 });
+  t.after(() => player.dispose());
+  player.load(item("gesture.mp4"));
+  const video = player.video;
+  video.play = async () => {
+    throw new DOMException("Gesture required", "NotAllowedError");
+  };
+  video.readyState = 1;
+  video.dispatchEvent(new Event("loadedmetadata"));
+  t.mock.timers.tick(20);
+  await settle();
+  assert.equal(player.loadStage, "gesture");
+  assert.equal(player.loading, true);
+  video.play = async () => {
+    video.paused = false;
+    video.readyState = 4;
+    video.dispatchEvent(new Event("canplay"));
+  };
+  await player.play();
+  await settle();
+  assert.equal(player.ready, true);
+  assert.equal(player.playing, true);
+});
+
+test("stalled cached media retries the original once, then stops loading with an actionable error", async (t) => {
+  t.mock.timers.enable({ apis: ["setTimeout", "setInterval"] });
+  let reads = 0,
+    discarded = 0;
+  const cache = {
+    limit: 1234,
+    async prepare(source) {
+      reads++;
+      return { file: source.file, url: "blob:cached", mode: "cached" };
+    },
+    discard() {
+      discarded++;
+    },
+    setLimit() {
+      throw new Error("Recovery must preserve the cache limit");
+    },
+  };
+  const player = setup(undefined, { cache, loadTimeoutMs: 30 });
+  t.after(() => player.dispose());
+  player.load(item("stalled.mp4"));
+  await settle();
+  const old = player.video;
+  t.mock.timers.tick(30);
+  assert.equal(player.video.src, "blob:stalled.mp4");
+  assert.equal(player.cacheState.mode, "fallback");
+  assert.equal(discarded, 1);
+  old.dispatchEvent(new Event("loadeddata"));
+  assert.equal(player.ready, false);
+  t.mock.timers.tick(30);
+  assert.equal(player.loading, false);
+  assert.match(player.error, /did not load/);
+  assert.equal(player.loadStage, "error");
+  t.mock.timers.tick(100_000);
+  assert.equal(reads, 1, "No infinite retry or repeated file reads");
+  assert.equal(cache.limit, 1234);
+  assert.ok(
+    player
+      .diagnostics()
+      .events.some((event) => event.event === "retry-original"),
+  );
+});
+
+test("cached decoding errors recover through the original URL and explicit direct retry preserves caching", async () => {
+  let reads = 0,
+    discarded = 0;
+  const cache = {
+    limit: 1234,
+    async prepare(source) {
+      reads++;
+      return { file: source.file, url: "blob:cached", mode: "cached" };
+    },
+    discard() {
+      discarded++;
+    },
+    setLimit() {
+      throw new Error("Direct retry must not disable preloading");
+    },
+  };
+  const player = setup(undefined, { cache });
+  player.load(item("error.mp4"));
+  await settle();
+  player.video.error = { code: 3, message: "Decode failed" };
+  player.video.dispatchEvent(new Event("error"));
+  assert.equal(player.video.src, "blob:error.mp4");
+  assert.equal(discarded, 1);
+  player.video.dispatchEvent(new Event("loadeddata"));
+  assert.equal(player.ready, true);
+  player.retry({ direct: true });
+  assert.equal(player.cacheState.mode, "bypassed");
+  assert.equal(reads, 1);
+  assert.equal(cache.limit, 1234);
+  player.dispose();
+});
+
+test("source replacement cancels load timers and ignores a late rejected decoder request", async (t) => {
+  t.mock.timers.enable({ apis: ["setTimeout", "setInterval"] });
+  const player = setup(undefined, { primeDelayMs: 10, loadTimeoutMs: 30 });
+  t.after(() => player.dispose());
+  player.load(item("old.mp4"));
+  let rejectPlay;
+  player.video.play = () =>
+    new Promise((resolve, reject) => {
+      rejectPlay = reject;
+    });
+  player.video.readyState = 1;
+  player.video.dispatchEvent(new Event("loadedmetadata"));
+  t.mock.timers.tick(10);
+  player.load(item("new.mp4"));
+  player.video.dispatchEvent(new Event("loadeddata"));
+  rejectPlay(new DOMException("Old request denied", "NotAllowedError"));
+  await settle();
+  t.mock.timers.tick(1000);
+  assert.equal(player.ready, true);
+  assert.equal(player.error, "");
+  assert.equal(player.loadStage, "ready");
+  assert.equal(
+    player
+      .diagnostics()
+      .events.some((event) => event.event === "first-frame-timeout"),
+    false,
+  );
 });

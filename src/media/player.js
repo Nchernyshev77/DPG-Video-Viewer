@@ -19,11 +19,18 @@ export class VideoPlayer extends EventTarget {
   #seek = null;
   #pendingSteps = 0;
   #repeatStep = 0;
+  #loadTimeoutMs;
+  #primeDelayMs;
+  #loadEvents = [];
+  #loadStarted = 0;
+  #startTime = 0;
+  #sourceMode = "empty";
 
   video = null;
   item = null;
   ready = false;
   loading = false;
+  loadStage = "empty";
   fps = null;
   fpsSource = null;
   variableFrameRate = false;
@@ -37,6 +44,8 @@ export class VideoPlayer extends EventTarget {
       readMetadata = readVideoMetadata,
       cache = null,
       presentFrame = () => {},
+      loadTimeoutMs = CONFIG.mediaLoadTimeoutMs,
+      primeDelayMs = CONFIG.mediaPrimeDelayMs,
     } = {},
   ) {
     super();
@@ -44,6 +53,8 @@ export class VideoPlayer extends EventTarget {
     this.#readMetadata = readMetadata;
     this.#cache = cache;
     this.#presentFrame = presentFrame;
+    this.#loadTimeoutMs = loadTimeoutMs;
+    this.#primeDelayMs = primeDelayMs;
   }
 
   get seeking() {
@@ -51,7 +62,9 @@ export class VideoPlayer extends EventTarget {
   }
 
   get playing() {
-    return Boolean(this.video && !this.video.paused && !this.video.ended);
+    return Boolean(
+      this.ready && this.video && !this.video.paused && !this.video.ended,
+    );
   }
   get duration() {
     return Number.isFinite(this.video?.duration) ? this.video.duration : 0;
@@ -83,7 +96,16 @@ export class VideoPlayer extends EventTarget {
     return this.#presentFrame();
   }
 
-  load(item, { autoplay = false, startTime = 0, cacheLimit } = {}) {
+  load(
+    item,
+    {
+      autoplay = false,
+      startTime = 0,
+      cacheLimit,
+      direct = false,
+      recovery = false,
+    } = {},
+  ) {
     this.#generation++;
     this.#stopFrames();
     this.#sourceLife?.dispose();
@@ -99,6 +121,13 @@ export class VideoPlayer extends EventTarget {
     this.item = item;
     this.ready = false;
     this.loading = Boolean(item);
+    this.loadStage = item ? "preloading" : "empty";
+    this.#sourceMode = "empty";
+    this.#startTime = startTime;
+    if (!recovery) {
+      this.#loadEvents = [];
+      this.#loadStarted = performance.now();
+    }
     this.fps = this.fpsSource = null;
     this.variableFrameRate = false;
     this.scrubbing = this.#scrubWasPlaying = false;
@@ -121,7 +150,14 @@ export class VideoPlayer extends EventTarget {
       if (life.signal.aborted || generation !== this.#generation) return;
       this.#openSource(item, source, life, generation, startTime);
     };
-    if (this.#cache) {
+    if (direct) {
+      this.cacheState = {
+        mode: recovery ? "fallback" : "bypassed",
+        read: 0,
+        total: item.file.size,
+      };
+      open({ url: item.url, file: item.file, mode: this.cacheState.mode });
+    } else if (this.#cache) {
       this.#emit();
       void this.#cache
         .prepare(item, life.signal, (state) => {
@@ -130,11 +166,14 @@ export class VideoPlayer extends EventTarget {
           this.#emit();
         })
         .then(open)
-        .catch((error) => {
+        .catch(() => {
           if (!life.signal.aborted) {
-            this.error = "Could not preload the video. Choose another file.";
-            this.loading = false;
-            this.#emit();
+            this.cacheState = {
+              mode: "failed",
+              read: 0,
+              total: item.file.size,
+            };
+            open({ url: item.url, file: item.file, mode: "failed" });
           }
         });
     } else open({ url: item.url, file: item.file });
@@ -148,9 +187,124 @@ export class VideoPlayer extends EventTarget {
     video.playsInline = true;
     video.muted = true;
     video.loop = true;
-    video.hidden = true;
+    // Keep a media box in the document: display:none can suppress media work.
+    video.setAttribute("aria-hidden", "true");
+    video.tabIndex = -1;
     this.#container.append(video);
+    this.#sourceMode = source.mode || "direct";
+    this.loadStage = "metadata";
     let restoreTime = startTime;
+    let priming = false;
+    let primed = false;
+    let finished = false;
+    let primeTimer;
+    let deadline;
+    let poll;
+    const stopLoadingTimers = () => {
+      clearTimeout(primeTimer);
+      clearTimeout(deadline);
+      clearInterval(poll);
+    };
+    life.cleanup(stopLoadingTimers);
+    const record = (event) => {
+      this.#loadEvents.push({
+        event,
+        ms: Math.round(performance.now() - this.#loadStarted),
+        readyState: video.readyState,
+        networkState: video.networkState,
+      });
+      if (this.#loadEvents.length > 24) this.#loadEvents.shift();
+    };
+    const fail = (message) => {
+      if (finished || life.signal.aborted) return;
+      finished = true;
+      stopLoadingTimers();
+      if (!this.ready && source.mode === "cached") {
+        record("retry-original");
+        this.load(item, {
+          autoplay: this.#autoplay,
+          startTime,
+          direct: true,
+          recovery: true,
+        });
+        // Detach the cached URL before discarding an unusable copy.
+        this.#cache?.discard?.(item.file);
+        return;
+      }
+      this.#stopFrames();
+      this.#seek = null;
+      this.#pendingSeek = null;
+      this.#pendingSteps = this.#repeatStep = 0;
+      this.ready = this.loading = false;
+      this.loadStage = "error";
+      this.error = message;
+      video.pause();
+      this.#emit();
+    };
+    const checkReady = () => {
+      if (
+        finished ||
+        life.signal.aborted ||
+        this.ready ||
+        video.readyState < 2 ||
+        video.seeking ||
+        !video.videoWidth ||
+        !video.videoHeight
+      )
+        return;
+      if (priming && !this.#autoplay) {
+        priming = false;
+        video.pause();
+        const target = clamp(startTime, 0, Math.max(0, this.duration - 0.001));
+        if (Math.abs(video.currentTime - target) > 0.00001) {
+          video.currentTime = target;
+          return;
+        }
+      }
+      stopLoadingTimers();
+      this.ready = true;
+      this.loading = false;
+      this.loadStage = "ready";
+      record("first-frame");
+      this.#emit("ready");
+      void this.#drawFrame();
+      this.#emit();
+      if (this.#autoplay) {
+        this.#autoplay = false;
+        void this.play();
+      }
+    };
+    const prime = () => {
+      if (finished || life.signal.aborted || this.ready || primed) return;
+      primed = priming = true;
+      this.loadStage = "frame";
+      record("request-first-frame");
+      this.#emit();
+      // preload=auto is a hint. A muted play request can make the decoder start.
+      void video
+        .play()
+        .then(checkReady)
+        .catch((error) => {
+          if (
+            finished ||
+            life.signal.aborted ||
+            this.ready ||
+            error.name === "AbortError"
+          )
+            return;
+          priming = false;
+          if (error.name === "NotAllowedError") {
+            this.loadStage = "gesture";
+            record("play-needs-gesture");
+            this.#emit();
+          }
+        });
+    };
+    life.on(
+      video,
+      "loadstart loadedmetadata loadeddata canplay canplaythrough stalled suspend error",
+      (event) => record(event.type),
+    );
     life.on(video, "loadedmetadata durationchange", () => {
       if (restoreTime > 0 && Number.isFinite(video.duration)) {
         video.currentTime = clamp(
@@ -160,25 +314,22 @@ export class VideoPlayer extends EventTarget {
         );
         restoreTime = 0;
       }
+      if (!this.ready && !finished && this.loadStage !== "gesture")
+        this.loadStage = "frame";
+      checkReady();
+      if (!this.ready && !finished && !primed && !primeTimer)
+        primeTimer = setTimeout(prime, this.#primeDelayMs);
       this.#emit();
     });
-    life.on(video, "loadeddata", () => {
-      this.ready = true;
-      this.loading = false;
-      this.#emit("ready");
-      void this.#drawFrame();
-      this.#emit();
-    });
-    life.on(video, "canplay", () => {
-      if (this.#autoplay) {
-        this.#autoplay = false;
-        void this.play();
-      }
-    });
+    life.on(
+      video,
+      "loadeddata canplay canplaythrough progress timeupdate seeked",
+      checkReady,
+    );
     life.on(video, "play", () => {
       this.error = "";
       this.#sample = null;
-      this.#startFrames();
+      if (this.ready) this.#startFrames();
       this.#emit();
     });
     life.on(video, "pause ended", () => {
@@ -191,21 +342,30 @@ export class VideoPlayer extends EventTarget {
       this.#sample = null;
     });
     life.on(video, "seeked", () => {
+      if (!this.ready) return;
       this.#seek ||= { generation, presenting: false };
       this.#seek.seeked = true;
       this.#presentSeek();
     });
     life.on(video, "loadeddata canplay", () => this.#presentSeek());
     life.on(video, "error", () => {
-      this.#stopFrames();
-      this.#seek = null;
-      this.#pendingSeek = null;
-      this.#pendingSteps = this.#repeatStep = 0;
-      this.ready = this.loading = false;
-      this.error =
-        "Playback error. This browser may not support the video codec. Choose another file.";
-      this.#emit();
+      fail(
+        video.error?.code === 2
+          ? "The file could not be read. Check the disk or network connection and retry."
+          : "The video could not be decoded. This browser may not support its codec, or the file may be damaged.",
+      );
     });
+    deadline = setTimeout(() => {
+      checkReady();
+      if (this.ready) return;
+      record("first-frame-timeout");
+      fail(
+        video.readyState >= 1
+          ? "The first frame did not load. Retry, or check whether this video plays in the original viewer."
+          : "The video did not load. Check access to the file and retry.",
+      );
+    }, this.#loadTimeoutMs);
+    poll = setInterval(checkReady, CONFIG.mediaPollMs);
     video.src = source.url;
     video.load();
     this.#emit();
@@ -225,13 +385,17 @@ export class VideoPlayer extends EventTarget {
   }
 
   async play() {
-    if (!this.ready || !this.video) return;
+    if (!this.video || (!this.ready && !this.loading)) return;
+    if (!this.ready) this.#autoplay = true;
     const video = this.video;
     try {
       await video.play();
+      if (video === this.video && this.playing) this.#startFrames();
     } catch (error) {
       if (video !== this.video || error.name === "AbortError") return;
-      this.error = "Playback could not start. Press Play to try again.";
+      this.error = this.loading
+        ? "Playback could not start. Press Start video to try again."
+        : "Playback could not start. Press Play to try again.";
       this.#emit();
     }
   }
@@ -292,6 +456,36 @@ export class VideoPlayer extends EventTarget {
 
   stopStepping() {
     this.#repeatStep = 0;
+  }
+
+  retry({ direct = false } = {}) {
+    if (!this.item) return;
+    this.load(this.item, {
+      autoplay: this.playing || this.#autoplay,
+      startTime: this.ready ? this.currentTime : this.#startTime,
+      direct,
+    });
+  }
+
+  diagnostics() {
+    return {
+      file: this.item?.name,
+      bytes: this.item?.file.size,
+      type: this.item?.file.type || "unknown",
+      stage: this.loadStage,
+      source: this.#sourceMode,
+      cache: this.cacheState,
+      readyState: this.video?.readyState,
+      networkState: this.video?.networkState,
+      width: this.video?.videoWidth,
+      height: this.video?.videoHeight,
+      mediaError: this.video?.error && {
+        code: this.video.error.code,
+        message: this.video.error.message,
+      },
+      error: this.error,
+      events: this.#loadEvents.slice(),
+    };
   }
 
   reloadCache(limit = this.#cache?.limit) {
