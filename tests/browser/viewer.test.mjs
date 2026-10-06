@@ -644,4 +644,12 @@ test("GitHub Pages subdirectory paths and compact mobile layout", async (t) => {
   assert.ok(bar.x >= 0 && bar.x + bar.width <= 375);
   assert.ok((await page.locator("#fsTimeRange").boundingBox()).width > 0);
   await page.screenshot({ path: `${root}/test-results/mobile.png` });
+  await page.locator("#infoBtn").click();
+  await page.locator("#loadDetailsPanel summary").click();
+  const info = await page.locator("#infoPanel").boundingBox();
+  assert.ok(
+    info.y + info.height < bar.y,
+    "Expanded loading details must leave playback controls accessible",
+  );
+  await page.screenshot({ path: `${root}/test-results/mobile-info.png` });
 });

@@ -22,6 +22,12 @@ export function createPanels(elements, playlist) {
   function position() {
     resizeHandle = null;
     const margin = 12;
+    const controls = elements.fsBar.getBoundingClientRect();
+    const bottom = Math.min(
+      window.innerHeight - margin,
+      controls.height ? controls.top - margin : window.innerHeight - margin,
+    );
+    const lastTop = Math.max(margin, bottom - 80);
     const dock = elements.plistDock.getBoundingClientRect();
     const longest = playlist.items.reduce(
       (a, item) => (item.name.length > a.length ? item.name : a),
@@ -41,8 +47,8 @@ export function createPanels(elements, playlist) {
     );
     plistPanel.style.width = `${width}px`;
     plistPanel.style.left = `${clamp(dock.right + 8, margin, window.innerWidth - width - margin)}px`;
-    plistPanel.style.top = `${clamp(plistBtn.getBoundingClientRect().top, margin, window.innerHeight - 80)}px`;
-    plistPanel.style.maxHeight = `${Math.max(50, Math.min(window.innerHeight * 0.5, window.innerHeight - parseFloat(plistPanel.style.top) - margin))}px`;
+    plistPanel.style.top = `${clamp(plistBtn.getBoundingClientRect().top, margin, lastTop)}px`;
+    plistPanel.style.maxHeight = `${Math.max(50, Math.min(window.innerHeight * 0.5, bottom - parseFloat(plistPanel.style.top)))}px`;
 
     const infoWidth = Math.min(320, availableWidth);
     infoPanel.style.width = `${infoWidth}px`;
@@ -50,8 +56,8 @@ export function createPanels(elements, playlist) {
     const top = isOpen(plistPanel)
       ? plistPanel.getBoundingClientRect().bottom + 8
       : infoBtn.getBoundingClientRect().top;
-    infoPanel.style.top = `${clamp(top, margin, window.innerHeight - 80)}px`;
-    infoPanel.style.maxHeight = `${Math.max(50, window.innerHeight - parseFloat(infoPanel.style.top) - margin)}px`;
+    infoPanel.style.top = `${clamp(top, margin, lastTop)}px`;
+    infoPanel.style.maxHeight = `${Math.max(50, bottom - parseFloat(infoPanel.style.top))}px`;
   }
 
   function schedulePosition() {
