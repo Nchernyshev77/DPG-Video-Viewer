@@ -50,6 +50,7 @@ export function createViewer(
   let disposed = false;
   let contextLost = false;
   let drawCount = 0;
+  const frameWaiters = [];
 
   function fitPlane() {
     const height = 2 * Math.tan(THREE.MathUtils.degToRad(camera.fov / 2));
@@ -65,6 +66,8 @@ export function createViewer(
   function render() {
     renderHandle = null;
     if (disposed || contextLost || document.hidden) return;
+    // A seek can temporarily invalidate the video image. Keep the last GPU frame.
+    if (video && (video.seeking || video.readyState < 2)) return;
     // OrbitControls emits change only while its damping is still moving the camera.
     if (controls.enabled) controls.update();
     if (frameDirty && texture && video?.readyState >= 2)
@@ -72,6 +75,7 @@ export function createViewer(
     frameDirty = false;
     renderer.render(scene, camera);
     drawCount++;
+    for (const resolve of frameWaiters.splice(0)) resolve(true);
   }
 
   function requestRender(newFrame = false) {
@@ -101,6 +105,8 @@ export function createViewer(
   }
 
   function clear() {
+    for (const resolve of frameWaiters.splice(0)) resolve(false);
+    frameDirty = false;
     flatMaterial.map = null;
     flatMaterial.needsUpdate = true;
     if (sphere) {
@@ -199,7 +205,11 @@ export function createViewer(
       setFov(camera.fov + delta);
     },
     drawFrame() {
-      requestRender(true);
+      if (disposed) return Promise.resolve(false);
+      return new Promise((resolve) => {
+        frameWaiters.push(resolve);
+        requestRender(true);
+      });
     },
     setPlaying(playing) {
       controls.enableDamping = !playing;

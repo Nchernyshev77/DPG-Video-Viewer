@@ -36,6 +36,31 @@
 #infoPanel .body dd {
   margin: 0;
 }
+.cache-settings {
+  border-top: 1px solid var(--line);
+  margin-top: 0.8rem;
+  padding-top: 0.8rem;
+}
+.cache-settings label,
+.cache-settings select {
+  display: block;
+  width: 100%;
+}
+.cache-settings select {
+  background: #151515;
+  color: var(--text);
+  border: 1px solid #444;
+  border-radius: 6px;
+  padding: 0.4rem;
+  margin-top: 0.4rem;
+}
+.cache-settings p {
+  margin: 0.5rem 0;
+  color: var(--muted);
+}
+#cacheSkip[hidden] {
+  display: none;
+}
 
 /* playlist custom dropdown */
 

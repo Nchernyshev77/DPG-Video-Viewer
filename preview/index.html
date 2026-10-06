@@ -236,8 +236,8 @@
           </button>
         </div>
         <!-- Info panel -->
-        <aside id="infoPanel" aria-label="Hotkeys">
-          <header>Hotkeys</header>
+        <aside id="infoPanel" aria-label="Hotkeys and cache">
+          <header>Hotkeys / Info</header>
           <div class="body">
             <dl>
               <dt>Play / Pause</dt>
@@ -269,6 +269,22 @@
               <dt>Select frame</dt>
               <dd>Left click on frames</dd>
             </dl>
+            <section class="cache-settings" aria-label="Video cache">
+              <label for="cacheLimit">Preload cache limit</label>
+              <select id="cacheLimit">
+                <option value="0">Off — direct disk access</option>
+                <option value="536870912">512 MB</option>
+                <option value="1073741824">1 GB</option>
+                <option value="2147483648" selected>2 GB (default)</option>
+                <option value="4294967296">
+                  4 GB — requires enough memory
+                </option>
+              </select>
+              <p id="cacheStatus" aria-live="polite"></p>
+              <button id="cacheSkip" class="btn" type="button" hidden>
+                Open without preloading
+              </button>
+            </section>
           </div>
         </aside>
         <div id="plistPanel" role="dialog" aria-label="Playlist">

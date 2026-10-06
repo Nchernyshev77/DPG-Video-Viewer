@@ -8,6 +8,8 @@ export const CONFIG = Object.freeze({
   uiIntervalMs: 80,
   autoHideMs: 2000,
   fallbackFps: 30,
+  cacheBytes: 2 * 1024 ** 3,
+  cacheChunkBytes: 8 * 1024 ** 2,
   maxMetadataBytes: 4 * 1024 * 1024,
   maxMetadataBoxes: 4096,
 });
