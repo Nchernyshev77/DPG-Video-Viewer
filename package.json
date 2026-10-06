@@ -1,0 +1,24 @@
+{
+  "name": "dpg-video-viewer",
+  "version": "2.0.0",
+  "private": true,
+  "type": "module",
+  "description": "Local flat and equirectangular video viewer with native ES modules",
+  "engines": {
+    "node": ">=22"
+  },
+  "scripts": {
+    "format": "prettier --write index.html \"src/**/*.js\" \"styles/**/*.css\" \"tools/*.mjs\" \"tests/**/*.mjs\" \"docs/*.md\" README.md package.json .github/workflows/ci.yml",
+    "dev": "node tools/serve.mjs",
+    "build": "node tools/build.mjs",
+    "preview": "node tools/serve.mjs --dir=dist",
+    "check": "node tools/check.mjs",
+    "test": "node --test tests/unit/*.test.mjs",
+    "test:fixtures": "node tools/fixtures.mjs",
+    "test:browser": "node --test tests/browser/*.test.mjs"
+  },
+  "devDependencies": {
+    "playwright": "1.62.1",
+    "prettier": "3.6.2"
+  }
+}

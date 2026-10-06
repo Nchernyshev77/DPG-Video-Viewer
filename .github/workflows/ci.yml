@@ -1,0 +1,47 @@
+name: Viewer checks
+
+on:
+  push:
+    branches: [main, "refactor/**"]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    strategy:
+      fail-fast: false
+      matrix:
+        browser: [chromium, firefox]
+    env:
+      DPG_TEST_BROWSER: ${{ matrix.browser }}
+      DPG_HEADLESS: "false"
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+      - run: npm ci --ignore-scripts
+      - run: npm run check
+      - run: npm test
+      - run: npm run build
+      - run: sudo apt-get update && sudo apt-get install -y ffmpeg
+      - run: npx playwright install --with-deps ${{ matrix.browser }}
+      - run: git fetch origin b26d5c8be5068f4b9950274e6e0d122b8df39b60 --depth=1
+      - run: npm run test:fixtures
+      - run: xvfb-run --auto-servernum npm run test:browser
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: viewer-${{ matrix.browser }}-results
+          path: |
+            test-results/*.png
+            test-results/*.json
+          if-no-files-found: ignore
+          retention-days: 7
