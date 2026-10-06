@@ -65,6 +65,7 @@ async function pageFor(t, url = origin, options = {}) {
     viewport: { width: 1280, height: 720 },
     ...options,
   });
+  await page.bringToFront();
   const failures = [];
   page.on("pageerror", (error) => failures.push(error.message));
   page.on("console", (message) => {
@@ -678,9 +679,14 @@ test("playback keeps rendering with stalled or unavailable video-frame callbacks
   for (const callbacks of ["stalled", "unavailable"]) {
     const page = await pageFor(t);
     await page.evaluate((callbacks) => {
-      HTMLVideoElement.prototype.requestVideoFrameCallback =
-        callbacks === "stalled" ? () => 1 : undefined;
-      HTMLVideoElement.prototype.cancelVideoFrameCallback = () => {};
+      if (callbacks === "stalled") {
+        HTMLVideoElement.prototype.requestVideoFrameCallback = () => 1;
+        HTMLVideoElement.prototype.cancelVideoFrameCallback = () => {};
+      } else {
+        // Three.js detects API availability with `in`, as real older browsers do.
+        delete HTMLVideoElement.prototype.requestVideoFrameCallback;
+        delete HTMLVideoElement.prototype.cancelVideoFrameCallback;
+      }
       window.uploads = [];
       for (const prototype of [
         WebGLRenderingContext.prototype,
