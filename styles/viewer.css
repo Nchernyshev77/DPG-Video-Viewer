@@ -8,13 +8,6 @@
   min-height: 0;
   background: var(--bg);
 }
-#mediaVideo {
-  position: absolute;
-  width: 1px;
-  height: 1px;
-  opacity: 0;
-  pointer-events: none;
-}
 canvas {
   display: block;
   position: absolute;

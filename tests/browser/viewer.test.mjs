@@ -85,6 +85,9 @@ async function pageFor(t, url = origin, options = {}) {
         .app,
   );
   assert.equal(await page.evaluate((app) => Boolean(app), handle), true);
+  await page.evaluate((app) => {
+    Object.defineProperty(window, "testVideo", { get: () => app.player.video });
+  }, handle);
   appHandles.set(page, handle);
   return page;
 }
@@ -135,10 +138,7 @@ test("local dependencies, actual MP4 decoding and zero idle redraws", async (t) 
     () => document.getElementById("hudFps").textContent === "FPS: 30",
   );
   assert.equal(await page.locator("#status").isVisible(), false);
-  assert.equal(
-    await page.evaluate(() => document.getElementById("mediaVideo").paused),
-    true,
-  );
+  assert.equal(await page.evaluate(() => window.testVideo.paused), true);
   await page.waitForTimeout(350);
   const before = await page.evaluate(async () =>
     (
@@ -497,10 +497,7 @@ test("fractional FPS, frame stepping, editing shortcuts and seek coalescing", as
     document.dispatchEvent(new PointerEvent("pointerup", { bubbles: true }));
   });
   await waitSeek(page, 1.25);
-  assert.equal(
-    await page.evaluate(() => document.getElementById("mediaVideo").paused),
-    true,
-  );
+  assert.equal(await page.evaluate(() => window.testVideo.paused), true);
 });
 
 test("playlist duplicates, literal filenames, rapid switching and GPU resource cleanup", async (t) => {
@@ -552,15 +549,14 @@ test("playlist duplicates, literal filenames, rapid switching and GPU resource c
   });
   await waitReady(page);
   assert.equal(
-    await page.evaluate(() => document.querySelectorAll("video").length),
-    1,
+    await page.evaluate(
+      () => Boolean(window.testVideo) && !window.testVideo.isConnected,
+    ),
+    true,
   );
   await page.locator("#closeAll").click();
   await page.waitForTimeout(80);
-  assert.equal(
-    await page.evaluate(() => document.querySelectorAll("video").length),
-    0,
-  );
+  assert.equal(await page.evaluate(() => window.testVideo), null);
   assert.equal(
     await page.evaluate(
       async () =>
@@ -628,9 +624,7 @@ test("play/pause, auto-hide hold and fullscreen panels", async (t) => {
     document.getElementById("viewer").classList.contains("ui-autoHide"),
   );
   await page.mouse.click(640, 360);
-  await page.waitForFunction(
-    () => document.getElementById("mediaVideo").paused,
-  );
+  await page.waitForFunction(() => window.testVideo.paused);
   assert.ok(
     !((await page.locator("#viewer").getAttribute("class")) || "").includes(
       "ui-autoHide",
@@ -680,6 +674,76 @@ test("GitHub Pages subdirectory paths and compact mobile layout", async (t) => {
   await page.screenshot({ path: `${root}/test-results/mobile-info.png` });
 });
 
+test("playback keeps rendering with stalled or unavailable video-frame callbacks", async (t) => {
+  for (const callbacks of ["stalled", "unavailable"]) {
+    const page = await pageFor(t);
+    await page.evaluate((callbacks) => {
+      HTMLVideoElement.prototype.requestVideoFrameCallback =
+        callbacks === "stalled" ? () => 1 : undefined;
+      HTMLVideoElement.prototype.cancelVideoFrameCallback = () => {};
+      window.uploads = [];
+      for (const prototype of [
+        WebGLRenderingContext.prototype,
+        WebGL2RenderingContext.prototype,
+      ]) {
+        for (const method of ["texImage2D", "texSubImage2D"]) {
+          const original = prototype[method];
+          prototype[method] = function (...args) {
+            const video = args.at(-1);
+            if (
+              window.measure &&
+              video instanceof HTMLVideoElement &&
+              !video.paused
+            )
+              window.uploads.push(video.currentTime);
+            return original.apply(this, args);
+          };
+        }
+      }
+    }, callbacks);
+    await ready(page, "flat.mp4");
+    await page.evaluate(() => {
+      window.measure = true;
+    });
+    await page.locator("#play").click();
+    await page.waitForFunction(() => window.testVideo.currentTime > 0.7);
+    const sample = await page.evaluate(
+      (app) => ({
+        uploads: window.uploads.length,
+        first: window.uploads[0],
+        last: window.uploads.at(-1),
+        draws: app.view.diagnostics().drawCount,
+      }),
+      appHandles.get(page),
+    );
+    assert.ok(
+      sample.uploads >= 8,
+      `${callbacks}: multiple decoded frames must reach WebGL`,
+    );
+    assert.ok(
+      sample.last - sample.first > 0.3,
+      `${callbacks}: image must follow playback`,
+    );
+    await page.locator("#play").click();
+    await page.waitForTimeout(300);
+    const paused = await page.evaluate(
+      (app) => app.view.diagnostics().drawCount,
+      appHandles.get(page),
+    );
+    await page.waitForTimeout(300);
+    assert.equal(
+      await page.evaluate(
+        (app) => app.view.diagnostics().drawCount,
+        appHandles.get(page),
+      ),
+      paused,
+    );
+    t.diagnostic(
+      `${browserName} ${callbacks} callbacks: ${sample.uploads} WebGL uploads; ${sample.draws} draws`,
+    );
+  }
+});
+
 test("4K playback compared with the original renderer", async (t) => {
   const samples = {};
   for (const version of ["legacy", "modular"]) {
@@ -692,6 +756,16 @@ test("4K playback compared with the original renderer", async (t) => {
           ? `${origin}/assets/legacy/index.html`
           : `${origin}/`,
       );
+      if (version === "modular") {
+        await page.evaluate(async () => {
+          const { app } = await import(
+            document.querySelector("script[type=module][src]").src
+          );
+          Object.defineProperty(window, "testVideo", {
+            get: () => app.player.video,
+          });
+        });
+      }
       await page.evaluate(() => {
         window.uploads = [];
         for (const prototype of [
@@ -722,8 +796,7 @@ test("4K playback compared with the original renderer", async (t) => {
       await page.locator("#file").setInputFiles(`${fixtures}/vr-4k.mp4`);
       await page.waitForFunction(
         () => {
-          const video =
-            window.legacyViewer?.video || document.getElementById("mediaVideo");
+          const video = window.legacyViewer?.video || window.testVideo;
           return (
             video?.readyState >= 2 &&
             !document.getElementById("status").classList.contains("show")
@@ -735,8 +808,7 @@ test("4K playback compared with the original renderer", async (t) => {
       await page.locator("#play").click();
       await page.waitForTimeout(400);
       const sample = await page.evaluate(async () => {
-        const video =
-          window.legacyViewer?.video || document.getElementById("mediaVideo");
+        const video = window.legacyViewer?.video || window.testVideo;
         const before = video.getVideoPlaybackQuality();
         window.measure = true;
         const start = performance.now();

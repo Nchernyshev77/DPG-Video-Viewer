@@ -179,6 +179,35 @@ test("late metadata and media events from a previous file cannot change the curr
   assert.equal(player.fps, 24);
   player.dispose();
 });
+
+test("playback callbacks measure FPS and throttle UI without scheduling frame acknowledgements", async () => {
+  let paints = 0;
+  let updates = 0;
+  const player = setup(undefined, {
+    presentFrame: () => {
+      paints++;
+      return Promise.resolve(true);
+    },
+  });
+  player.load(item("play.mp4"));
+  player.video.dispatchEvent(new Event("loadeddata"));
+  await settle();
+  await player.play();
+  paints = 0;
+  player.addEventListener("update", () => updates++);
+  for (let now = 0; now < 320; now += 16) {
+    const [id, callback] = player.video.callbacks.entries().next().value;
+    player.video.callbacks.delete(id);
+    callback(now, { mediaTime: now / 1000, presentedFrames: now / 16 });
+  }
+  assert.equal(
+    paints,
+    0,
+    "Continuous playback does not wait for seek-style render acknowledgements",
+  );
+  assert.equal(updates, 4, "20 frame callbacks produce four UI updates");
+  player.dispose();
+});
 test("repeated scrub start preserves playback intent and source replacement cancels it", async () => {
   const player = setup();
   player.load(item("a.mp4"));

@@ -1,12 +1,13 @@
 import { CONFIG } from "../config.js";
 
-/** Read one bounded chunk; source replacement can stop a slow network read. */
-function readChunk(blob, signal, timeoutMs) {
+/** Read the selected file into one buffer, as in the original viewer. */
+function readFile(blob, signal, timeoutMs, progress) {
   return new Promise((resolve, reject) => {
     signal?.throwIfAborted();
     const reader = new FileReader();
     let timer;
     let finished = false;
+    let loaded = 0;
     const cleanup = () => {
       finished = true;
       clearTimeout(timer);
@@ -42,7 +43,12 @@ function readChunk(blob, signal, timeoutMs) {
         signal?.reason || new DOMException("Read cancelled", "AbortError"),
       );
     };
-    reader.onprogress = watch;
+    reader.onprogress = (event) => {
+      if (finished || event.loaded <= loaded) return;
+      loaded = event.loaded;
+      watch();
+      progress?.(loaded);
+    };
     signal?.addEventListener("abort", abort, { once: true });
     watch();
     try {
@@ -60,21 +66,18 @@ export class VideoCache {
   #bytes = 0;
   #urls;
   #read;
-  #chunkBytes;
   #readTimeoutMs;
   limit;
 
   constructor({
     limit = CONFIG.cacheBytes,
     urls = URL,
-    read = readChunk,
-    chunkBytes = CONFIG.cacheChunkBytes,
+    read = readFile,
     readTimeoutMs = CONFIG.cacheReadTimeoutMs,
   } = {}) {
     this.limit = limit;
     this.#urls = urls;
     this.#read = read;
-    this.#chunkBytes = chunkBytes;
     this.#readTimeoutMs = readTimeoutMs;
   }
 
@@ -122,23 +125,23 @@ export class VideoCache {
       this.#remove(this.#entries.keys().next().value);
     report("reading");
     try {
-      const parts = [];
-      for (let offset = 0; offset < original.size; offset += this.#chunkBytes) {
-        signal?.throwIfAborted();
-        const end = Math.min(original.size, offset + this.#chunkBytes);
-        const buffer = await this.#read(
-          original.slice(offset, end),
-          signal,
-          this.#readTimeoutMs,
-        );
-        signal?.throwIfAborted();
-        // Blob parts avoid staging a second file-sized ArrayBuffer at completion.
-        parts.push(new Blob([buffer]));
-        report("reading", end);
-      }
+      const buffer = await this.#read(
+        original,
+        signal,
+        this.#readTimeoutMs,
+        (read) => {
+          if (!signal?.aborted) report("reading", read);
+        },
+      );
       signal?.throwIfAborted();
-      const file = new File(parts, original.name, {
-        type: original.type,
+      if (buffer.byteLength !== original.size)
+        throw new Error("Incomplete file read");
+      // Preserve the source shape and MIME fallback of the working legacy path.
+      const file = new Blob([buffer], {
+        type: original.type || "application/octet-stream",
+      });
+      Object.assign(file, {
+        name: original.name,
         lastModified: original.lastModified,
       });
       const entry = {

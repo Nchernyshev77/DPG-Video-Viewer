@@ -4,7 +4,6 @@ import { createLifecycle } from "../core/lifecycle.js";
 import { readVideoMetadata } from "./metadata.js";
 
 export class VideoPlayer extends EventTarget {
-  #container;
   #readMetadata;
   #sourceLife = null;
   #generation = 0;
@@ -25,6 +24,7 @@ export class VideoPlayer extends EventTarget {
   #loadStarted = 0;
   #startTime = 0;
   #sourceMode = "empty";
+  #lastPlaybackUpdate = -Infinity;
 
   video = null;
   item = null;
@@ -49,7 +49,6 @@ export class VideoPlayer extends EventTarget {
     } = {},
   ) {
     super();
-    this.#container = container;
     this.#readMetadata = readMetadata;
     this.#cache = cache;
     this.#presentFrame = presentFrame;
@@ -187,10 +186,8 @@ export class VideoPlayer extends EventTarget {
     video.playsInline = true;
     video.muted = true;
     video.loop = true;
-    // Keep a media box in the document: display:none can suppress media work.
-    video.setAttribute("aria-hidden", "true");
-    video.tabIndex = -1;
-    this.#container.append(video);
+    // The legacy viewer uses a detached media element, consumed only by WebGL.
+    // A transparent 1px DOM video can trigger browser visibility optimizations.
     this.#sourceMode = source.mode || "direct";
     this.loadStage = "metadata";
     let restoreTime = startTime;
@@ -329,6 +326,7 @@ export class VideoPlayer extends EventTarget {
     life.on(video, "play", () => {
       this.error = "";
       this.#sample = null;
+      this.#lastPlaybackUpdate = -Infinity;
       if (this.ready) this.#startFrames();
       this.#emit();
     });
@@ -582,12 +580,16 @@ export class VideoPlayer extends EventTarget {
       return;
     const video = this.video;
     const generation = this.#generation;
-    const tick = (_now, metadata) => {
+    const tick = (now, metadata) => {
       this.#frameHandle = this.#fallbackHandle = null;
       if (generation !== this.#generation) return;
       this.#observeFPS(metadata);
-      void this.#drawFrame();
-      this.#emit();
+      // Playback is painted by the renderer's RAF loop. Frame callbacks only
+      // measure FPS and update the HUD; they must not gate display refresh.
+      if (now - this.#lastPlaybackUpdate >= CONFIG.uiIntervalMs) {
+        this.#lastPlaybackUpdate = now;
+        this.#emit();
+      }
       if (this.playing) this.#startFrames();
     };
     if (video.requestVideoFrameCallback)

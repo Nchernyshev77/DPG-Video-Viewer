@@ -12,7 +12,6 @@ function setup(options = {}) {
   let id = 0;
   const cache = new VideoCache({
     limit: 12,
-    chunkBytes: 2,
     urls: {
       createObjectURL: () => `blob:cache-${++id}`,
       revokeObjectURL: (url) => revoked.push(url),
@@ -26,7 +25,7 @@ function setup(options = {}) {
   return { cache, reads, revoked };
 }
 
-test("preload preserves bytes and filename, uses bounded reads and reuses a selected File", async () => {
+test("preload preserves bytes in one flat Blob and reuses a selected File", async () => {
   const { cache, reads, revoked } = setup();
   const source = item("remote.mp4");
   const states = [];
@@ -36,12 +35,14 @@ test("preload preserves bytes and filename, uses bounded reads and reuses a sele
   assert.equal(await first.file.text(), "abcdef");
   assert.equal(first.file.name, source.file.name);
   assert.equal(first.file.type, source.file.type);
-  assert.deepEqual(reads, [2, 2, 2]);
+  assert.deepEqual(reads, [6]);
+  assert.equal(first.file instanceof Blob, true);
+  assert.equal(first.file instanceof File, false);
   assert.equal(states.at(-1).read, 6);
   assert.equal(await cache.prepare(source), first);
   assert.equal(
     reads.length,
-    3,
+    1,
     "Switching back does not reread the network file",
   );
   cache.dispose();
@@ -139,16 +140,12 @@ test("an unresponsive FileReader is aborted and falls back without publishing pa
 test("real read progress renews the timeout; cancellation immediately rejects even if abort emits nothing", async (t) => {
   t.mock.timers.enable({ apis: ["setTimeout"] });
   const readers = fakeReader(t);
-  const { cache } = setup({
-    read: undefined,
-    readTimeoutMs: 20,
-    chunkBytes: 10,
-  });
+  const { cache } = setup({ read: undefined, readTimeoutMs: 20 });
   const source = item("slow.mp4");
   const data = await source.file.arrayBuffer();
   const pending = cache.prepare(source);
   t.mock.timers.tick(15);
-  readers[0].onprogress();
+  readers[0].onprogress({ loaded: 1 });
   t.mock.timers.tick(15);
   assert.equal(readers[0].aborted, false);
   readers[0].result = data;

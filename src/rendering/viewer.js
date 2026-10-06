@@ -50,6 +50,7 @@ export function createViewer(
   let disposed = false;
   let contextLost = false;
   let drawCount = 0;
+  let playing = false;
   const frameWaiters = [];
 
   function fitPlane() {
@@ -66,6 +67,9 @@ export function createViewer(
   function render() {
     renderHandle = null;
     if (disposed || contextLost || document.hidden) return;
+    // Match the legacy playback clock: paint on every display refresh while
+    // playing, even if rVFC is delayed or unavailable. Paused work is on demand.
+    if (playing) requestRender(true);
     // A seek can temporarily invalidate the video image. Keep the last GPU frame.
     if (video && (video.seeking || video.readyState < 2)) return;
     // OrbitControls emits change only while its damping is still moving the camera.
@@ -117,6 +121,7 @@ export function createViewer(
     plane.visible = false;
     texture?.dispose();
     texture = video = null;
+    playing = false;
     controls.enabled = false;
     requestRender();
   }
@@ -166,6 +171,13 @@ export function createViewer(
     requestRender(true);
   }
 
+  function setPlaying(value) {
+    if (playing === value) return;
+    playing = value;
+    controls.enableDamping = !playing;
+    if (playing) requestRender(true);
+  }
+
   life.on(controls, "change", () => requestRender());
   life.on(window, "resize", scheduleResize);
   life.on(document, "visibilitychange", () => {
@@ -211,9 +223,7 @@ export function createViewer(
         requestRender(true);
       });
     },
-    setPlaying(playing) {
-      controls.enableDamping = !playing;
-    },
+    setPlaying,
     pan(dx, dy) {
       if (mode !== "flat" || !video) return;
       const height = 2 * Math.tan((camera.fov * Math.PI) / 360);
