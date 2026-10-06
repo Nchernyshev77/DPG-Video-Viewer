@@ -1,20 +1,24 @@
 {
   "branch": "refactor/modular-viewer",
-  "commit": "41807ad356b551c696f78f5475d84f0141d90b03",
-  "revision": "d1d0db3e630231f0",
+  "commit": "8f1305c3898d7e164bf5b0d99a548e292ab683e4",
+  "revision": "7102aace66e6ed58",
   "productionBranch": "main",
   "productionCommit": "b26d5c8be5068f4b9950274e6e0d122b8df39b60",
   "features": [
+    "flat-blob-preloading",
     "bounded-file-cache",
     "rendered-frame-step-queue",
+    "continuous-playback-rendering",
     "first-frame-recovery",
     "loading-timeouts",
     "one-time-original-source-fallback",
     "versioned-module-graph"
   ],
   "tests": {
-    "unit": 26,
-    "chromium": 11,
-    "ci": "https://github.com/Nchernyshev77/DPG-Video-Viewer/actions/runs/37455702521"
+    "unit": 27,
+    "chromium": 13,
+    "firefox": 13,
+    "ci": "https://github.com/Nchernyshev77/DPG-Video-Viewer/actions/runs/37468202550",
+    "environment": "Linux CI, software WebGL; synthetic MP4/WebM including 3840x1920; actual Windows Floorp and user video still require user validation"
   }
 }
